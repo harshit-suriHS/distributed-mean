@@ -1,0 +1,34 @@
+[project]
+name = "dmean-orchestrator"
+version = "0.1.0"
+description = "Plans jobs into tasks and serves them to workers through a fair, lease-based task queue"
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "ruff==0.17.1", "pyright==1.1.414"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dmean_orchestrator"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+# allow × and → in comments and docstrings
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
