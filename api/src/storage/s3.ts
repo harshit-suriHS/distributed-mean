@@ -1,5 +1,11 @@
-import { HeadBucketCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  HeadBucketCommand,
+  ListObjectsV2Command,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { Config } from "../config.js";
 
 export interface StoredObject {
@@ -53,6 +59,13 @@ export function createStorage(config: Config["s3"]) {
           ["content-length-range", 1, maxFileBytes],
         ],
         Expires: expiresInSeconds,
+      });
+    },
+
+    /** A short-lived download link, signed for the host clients use (S3_PUBLIC_ENDPOINT). */
+    presignDownload(key: string, expiresInSeconds: number) {
+      return getSignedUrl(publicClient, new GetObjectCommand({ Bucket: bucket, Key: key }), {
+        expiresIn: expiresInSeconds,
       });
     },
   };

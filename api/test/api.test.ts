@@ -1,5 +1,5 @@
 // Integration tests: need `docker compose up` (Postgres, MinIO, migrations applied).
-import { DeleteObjectsCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import pg from "pg";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -31,6 +31,7 @@ const s3 = new S3Client({
 
 const notifications: string[] = [];
 const createdUploads: string[] = [];
+const insertedJobIds: string[] = []; // jobs inserted directly (not through an upload)
 
 interface UploadResponse {
   upload_id: string;
@@ -86,6 +87,8 @@ afterAll(async () => {
       }),
     );
   }
+  await admin.query("DELETE FROM files WHERE job_id = ANY($1::bigint[])", [insertedJobIds]);
+  await admin.query("DELETE FROM jobs WHERE id = ANY($1::bigint[])", [insertedJobIds]);
   await admin.end();
   await pool.end();
 });
@@ -259,5 +262,93 @@ describe("DTOs", () => {
     );
     expect(job.body.id).toMatch(/^[0-9a-f-]{36}$/); // the uuid, never the bigint
     expect(new Date(job.body.created_at).toISOString()).toBe(job.body.created_at);
+  });
+});
+
+/** A job in a given state, as the orchestrator would leave it. */
+async function insertJob(status: string): Promise<{ id: string; uuid: string }> {
+  const { rows } = await admin.query<{ id: string; uuid: string }>(
+    `INSERT INTO jobs (no_of_files, no_of_columns, status, failure_type, completed_at)
+     VALUES (4, 3, $1, $2, CASE WHEN $1 IN ('succeeded', 'failed') THEN now() END)
+     RETURNING id, uuid`,
+    [status, status === "failed" ? "internal" : null],
+  );
+  const job = rows[0];
+  if (!job) throw new Error("insert failed");
+  insertedJobIds.push(job.id);
+  return job;
+}
+
+describe("GET /jobs", () => {
+  it("lists newest first with a cursor and a status filter", async () => {
+    const a = await insertJob("succeeded");
+    const b = await insertJob("running");
+    const c = await insertJob("failed");
+
+    const page1 = await request(app).get("/jobs?limit=2").expect(200);
+    expect(page1.body.jobs.map((j: { id: string }) => j.id)).toEqual([c.uuid, b.uuid]);
+    expect(page1.body.next).toBe(b.uuid);
+    expect(page1.body.jobs[0]).toMatchObject({
+      status: "failed",
+      failure_type: "internal",
+      percent: 0,
+    });
+
+    const page2 = await request(app).get(`/jobs?limit=2&before=${page1.body.next}`).expect(200);
+    expect(page2.body.jobs[0].id).toBe(a.uuid);
+
+    const running = await request(app).get("/jobs?status=running&limit=200").expect(200);
+    const ids = running.body.jobs.map((j: { id: string }) => j.id);
+    expect(ids).toContain(b.uuid);
+    expect(ids).not.toContain(a.uuid);
+  });
+
+  it("rejects a bad query", async () => {
+    await request(app).get("/jobs?status=paused").expect(400);
+    await request(app).get("/jobs?limit=1000").expect(400);
+    await request(app).get("/jobs?cursor=x").expect(400);
+  });
+});
+
+describe("GET /jobs/:id/result", () => {
+  it("409 until the job has succeeded", async () => {
+    const job = await insertJob("running");
+    const res = await request(app).get(`/jobs/${job.uuid}/result`).expect(409);
+    expect(res.body.error.message).toMatch(/job is running/);
+  });
+
+  it("404 for an unknown job", async () => {
+    await request(app).get(`/jobs/${crypto.randomUUID()}/result`).expect(404);
+  });
+
+  it("returns a presigned link that downloads the result CSV", async () => {
+    const job = await insertJob("succeeded");
+    const key = `results/${job.uuid}.csv`;
+    await s3.send(
+      new PutObjectCommand({ Bucket: config.s3.bucket, Key: key, Body: "2.5,3.5,4.5\n" }),
+    );
+    // the final task that produced the result (the schema requires a producer)
+    const { rows } = await admin.query<{ id: string }>(
+      `INSERT INTO tasks (job_id, kind, no_of_files, is_final, status)
+       VALUES ($1, 'map', 4, true, 'done') RETURNING id`,
+      [job.id],
+    );
+    await admin.query(
+      `INSERT INTO files (job_id, type, key, no_of_files, produced_by)
+       VALUES ($1, 'result', $2, 4, $3)`,
+      [job.id, key, rows[0]?.id],
+    );
+
+    const res = await request(app).get(`/jobs/${job.uuid}/result`).expect(200);
+    expect(Object.keys(res.body).sort()).toEqual(["expires_at", "url"]);
+    const download = await fetch(res.body.url);
+    expect(download.status).toBe(200);
+    expect(await download.text()).toBe("2.5,3.5,4.5\n");
+
+    await admin.query("DELETE FROM files WHERE job_id = $1", [job.id]);
+    await admin.query("DELETE FROM tasks WHERE job_id = $1", [job.id]);
+    await s3.send(
+      new DeleteObjectsCommand({ Bucket: config.s3.bucket, Delete: { Objects: [{ Key: key }] } }),
+    );
   });
 });

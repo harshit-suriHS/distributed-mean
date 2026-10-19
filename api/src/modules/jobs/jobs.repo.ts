@@ -66,3 +66,46 @@ export async function findJobByUuid(db: Db, uuid: string) {
   );
   return rows[0];
 }
+
+export interface JobSummary {
+  uuid: string;
+  status: JobStatus;
+  no_of_files: number;
+  no_of_columns: number;
+  files_done: number;
+  failure_type: FailureType | null;
+  created_at: Date;
+  completed_at: Date | null;
+}
+
+/** Newest first; keyset pagination on the time-ordered UUIDv7 (`before` = last id seen). */
+export async function listJobs(
+  db: Db,
+  { status, before, limit }: { status?: JobStatus; before?: string; limit: number },
+) {
+  const { rows } = await db.query<JobSummary>(
+    `SELECT j.uuid, j.status, j.no_of_files, j.no_of_columns, j.failure_type,
+            j.created_at, j.completed_at,
+            coalesce((SELECT sum(t.no_of_files) FROM tasks t
+                       WHERE t.job_id = j.id AND t.kind = 'map' AND t.status = 'done'), 0)::int
+              AS files_done
+       FROM jobs j
+      WHERE ($1::text IS NULL OR j.status = $1)
+        AND ($2::uuid IS NULL OR j.uuid < $2)
+      ORDER BY j.uuid DESC
+      LIMIT $3`,
+    [status ?? null, before ?? null, limit],
+  );
+  return rows;
+}
+
+export async function findResult(db: Db, jobUuid: string) {
+  const { rows } = await db.query<{ status: JobStatus; key: string | null }>(
+    `SELECT j.status, f.key
+       FROM jobs j
+       LEFT JOIN files f ON f.job_id = j.id AND f.type = 'result' AND f.deleted_at IS NULL
+      WHERE j.uuid = $1`,
+    [jobUuid],
+  );
+  return rows[0];
+}

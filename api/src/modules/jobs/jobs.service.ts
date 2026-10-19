@@ -3,8 +3,15 @@ import { withTransaction } from "../../db/pool.js";
 import { AppError, conflict, notFound } from "../../lib/errors.js";
 import { commitUpload, findUploadByUuid } from "../uploads/uploads.repo.js";
 import { uploadPrefix } from "../uploads/uploads.service.js";
-import type { CreateJobRequest } from "./jobs.dto.js";
-import { findJobByUuid, insertInputFiles, insertJob, notifyNewJob } from "./jobs.repo.js";
+import type { CreateJobRequest, ListJobsQuery } from "./jobs.dto.js";
+import {
+  findJobByUuid,
+  findResult,
+  insertInputFiles,
+  insertJob,
+  listJobs,
+  notifyNewJob,
+} from "./jobs.repo.js";
 
 /**
  * The commit step of an upload: check the files are all there, then create the job,
@@ -43,4 +50,23 @@ export async function getJob({ pool }: Deps, uuid: string) {
   const job = await findJobByUuid(pool, uuid);
   if (!job) throw notFound("job");
   return job;
+}
+
+export async function listAllJobs({ pool }: Deps, query: ListJobsQuery) {
+  return listJobs(pool, query);
+}
+
+const RESULT_LINK_SECONDS = 3600;
+
+/** A presigned link to the result CSV; only once the job has succeeded. */
+export async function getResultLink({ pool, storage }: Deps, uuid: string) {
+  const row = await findResult(pool, uuid);
+  if (!row) throw notFound("job");
+  if (row.status !== "succeeded" || !row.key) {
+    throw conflict(`job is ${row.status}; the result exists once it has succeeded`);
+  }
+  return {
+    url: await storage.presignDownload(row.key, RESULT_LINK_SECONDS),
+    expires_at: new Date(Date.now() + RESULT_LINK_SECONDS * 1000).toISOString(),
+  };
 }

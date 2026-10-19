@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { JobView } from "./jobs.repo.js";
+import type { JobSummary, JobView } from "./jobs.repo.js";
 
 // ---- Requests ----
 
@@ -12,6 +12,13 @@ export const CreateJobRequest = z.strictObject({
 export type CreateJobRequest = z.infer<typeof CreateJobRequest>;
 
 export const JobIdParams = z.strictObject({ id: z.uuid() });
+
+export const ListJobsQuery = z.strictObject({
+  status: z.enum(["queued", "running", "succeeded", "failed"]).optional(),
+  before: z.uuid().optional(), // the `next` cursor of the previous page
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+export type ListJobsQuery = z.infer<typeof ListJobsQuery>;
 
 // ---- Responses ----
 
@@ -49,6 +56,27 @@ export const JobResponse = z.object({
 });
 export type JobResponse = z.infer<typeof JobResponse>;
 
+export const JobSummaryResponse = z.object({
+  id: z.uuid(),
+  status: JobStatus,
+  no_of_files: z.int(),
+  no_of_columns: z.int(),
+  percent: z.int().min(0).max(100),
+  failure_type: z.enum(["internal", "user_input"]).nullable(),
+  created_at: Timestamp,
+  completed_at: Timestamp.nullable(),
+});
+
+export const ListJobsResponse = z.object({
+  jobs: z.array(JobSummaryResponse),
+  next: z.uuid().nullable(), // pass as ?before= for the next page; null on the last page
+});
+
+export const ResultResponse = z.object({
+  url: z.url(),
+  expires_at: Timestamp,
+});
+
 // ---- Mappers: DB row → response ----
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
@@ -76,5 +104,24 @@ export function toJobResponse(job: JobView): z.input<typeof JobResponse> {
     created_at: job.created_at.toISOString(),
     started_at: iso(job.started_at),
     completed_at: iso(job.completed_at),
+  };
+}
+
+export function toListJobsResponse(
+  jobs: JobSummary[],
+  limit: number,
+): z.input<typeof ListJobsResponse> {
+  return {
+    jobs: jobs.map((j) => ({
+      id: j.uuid,
+      status: j.status,
+      no_of_files: j.no_of_files,
+      no_of_columns: j.no_of_columns,
+      percent: Math.floor((j.files_done / j.no_of_files) * 100),
+      failure_type: j.failure_type,
+      created_at: j.created_at.toISOString(),
+      completed_at: iso(j.completed_at),
+    })),
+    next: jobs.length === limit ? (jobs[jobs.length - 1]?.uuid ?? null) : null,
   };
 }
