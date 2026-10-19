@@ -1,0 +1,42 @@
+# uv workspace root: shared lockfile and tool config for all Python services.
+[project]
+name = "distributed-mean-python"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/*"]
+
+[tool.uv.sources]
+dmean-common = { workspace = true }
+dmean-worker = { workspace = true }
+
+[dependency-groups]
+dev = ["dmean-common", "dmean-worker", "pytest==9.1.1", "ruff==0.17.1", "pyright==1.1.414"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+# allow × and → in comments and docstrings
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+# boto3 and dramatiq ship partial stubs; don't fail on their internals
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+
+[tool.pytest.ini_options]
+testpaths = ["apps/worker/tests"]
+markers = ["integration: needs docker compose (postgres, redis, minio)"]
