@@ -34,6 +34,7 @@ services:
       psql -v ON_ERROR_STOP=1 -q
            -v api_pw=${API_DB_PASSWORD}
            -v orchestrator_pw=${ORCHESTRATOR_DB_PASSWORD}
+           -v supervisor_pw=${SUPERVISOR_DB_PASSWORD}
            -f /roles.sql
     restart: "no"
 
@@ -120,20 +121,27 @@ services:
     restart: always
     init: true  # PID 1 forwards signals (PID 1 itself ignores signals it has no handler for)
 
-  worker:
-    build: ./worker
+  # No worker service: the supervisor starts and stops worker processes in its container to
+  # match settings.desired_workers (PUT /workers changes it). On Kubernetes, a Deployment of
+  # the worker image with replicas = W replaces the supervisor.
+  supervisor:
+    build:
+      context: .
+      dockerfile: supervisor/Dockerfile
     env_file: .env
     environment:
+      POSTGRES_HOST: postgres
       ORCHESTRATOR_ADDR: orchestrator:50051
       S3_ENDPOINT: http://minio:9000
     depends_on:
-      - orchestrator
-    deploy:
-      replicas: ${WORKERS:-3}
-    # SIGTERM drains the current task; give it time before SIGKILL
+      migrate:
+        condition: service_completed_successfully
+      orchestrator:
+        condition: service_started
+    # SIGTERM drains every worker (each finishes its current task); give them time
     stop_grace_period: 5m
     restart: always
-    init: true  # a SIGTERM during startup ends the process instead of being ignored
+    init: true
 
 volumes:
   postgres-data:

@@ -1,0 +1,54 @@
+[project]
+name = "dmean-supervisor"
+version = "0.1.0"
+description = "Keeps settings.desired_workers worker processes running (PUT /workers changes it)"
+requires-python = ">=3.13"
+dependencies = [
+  "dmean-worker",  # the worker it starts, installed in the same environment
+  "grpcio==1.84.0",
+  "protobuf==7.36.2",
+  "psycopg[binary]==3.3.6",
+  "pydantic-settings==2.16.0",
+  "structlog==26.1.0",
+]
+
+[tool.uv.sources]
+dmean-worker = { path = "../worker" }
+
+[project.scripts]
+dmean-supervisor = "dmean_supervisor.main:main"
+
+[dependency-groups]
+dev = ["grpcio-tools==1.84.0", "pytest==9.1.1", "ruff==0.17.1", "pyright==1.1.414"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dmean_supervisor"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["src/dmean_supervisor/rpc/*_pb2*.py*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+exclude = ["**/*_pb2*", ".venv"]
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownParameterType = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: needs docker compose (postgres)"]
