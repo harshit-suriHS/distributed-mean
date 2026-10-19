@@ -54,8 +54,8 @@ services:
 
   redis:
     image: redis:7.4-alpine
-    # No persistence on purpose: Redis is delivery only. After a restart the
-    # orchestrator re-sends in-flight tasks from Postgres (design §11, §16).
+    # Not used for task delivery (workers lease over gRPC). Kept until the UI's
+    # worker-events decision (design §26); no persistence needed.
     command: ["redis-server", "--appendonly", "no", "--save", ""]
     ports:
       - "${REDIS_PORT}:6379"
@@ -97,6 +97,55 @@ services:
       sh -c "mc alias set local http://minio:9000 $$S3_ACCESS_KEY $$S3_SECRET_KEY &&
              mc mb --ignore-existing local/$$S3_BUCKET"
     restart: "no"
+
+  # ---- application services (built from this repo) ----
+
+  api:
+    build: ./api
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      S3_ENDPOINT: http://minio:9000
+      # presigned URLs are used from the host machine
+      S3_PUBLIC_ENDPOINT: http://localhost:${MINIO_API_PORT}
+    ports:
+      - "${API_PORT}:${API_PORT}"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  orchestrator:
+    build: ./orchestrator
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      S3_ENDPOINT: http://minio:9000
+    ports:
+      - "${GRPC_PORT}:50051"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # crash-only: on a fatal error it exits, Docker restarts it, it rebuilds from Postgres
+    restart: always
+    init: true  # PID 1 forwards signals (PID 1 itself ignores signals it has no handler for)
+
+  worker:
+    build: ./worker
+    env_file: .env
+    environment:
+      ORCHESTRATOR_ADDR: orchestrator:50051
+      S3_ENDPOINT: http://minio:9000
+    depends_on:
+      - orchestrator
+    deploy:
+      replicas: ${WORKERS:-3}
+    # SIGTERM drains the current task; give it time before SIGKILL
+    stop_grace_period: 5m
+    restart: always
+    init: true  # a SIGTERM during startup ends the process instead of being ignored
 
 volumes:
   postgres-data:

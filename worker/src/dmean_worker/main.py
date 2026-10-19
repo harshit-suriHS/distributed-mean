@@ -52,11 +52,7 @@ def run_worker(
 
 
 def main() -> None:
-    settings = Settings()  # pyright: ignore[reportCallIssue]  # values come from env
-    configure_logging(settings.log_level, "worker")
-    worker_id = settings.worker_id or make_worker_id()
-    structlog.contextvars.bind_contextvars(worker_id=worker_id)
-
+    # Handlers first: a SIGTERM arriving during startup must not be lost
     draining = threading.Event()
 
     def on_signal(signum: int, frame: object) -> None:
@@ -64,6 +60,11 @@ def main() -> None:
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, on_signal)
+
+    settings = Settings()  # pyright: ignore[reportCallIssue]  # values come from env
+    configure_logging(settings.log_level, "worker")
+    worker_id = settings.worker_id or make_worker_id()
+    structlog.contextvars.bind_contextvars(worker_id=worker_id)
 
     client = TaskQueueClient(settings.orchestrator_addr, worker_id)
     runner = TaskRunner(Storage(settings), settings.slowdown_secs_per_file)
