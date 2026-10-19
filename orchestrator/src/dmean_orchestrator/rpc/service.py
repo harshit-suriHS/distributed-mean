@@ -31,6 +31,7 @@ from dmean_orchestrator.scheduling.fair_queue import (
 from dmean_orchestrator.scheduling.merge_pool import Partial, covers, take_merges
 from dmean_orchestrator.scheduling.planner import files_per_task, merge_fan_in
 from dmean_orchestrator.settings import Settings
+from dmean_orchestrator.storage.cleanup import Cleaner
 from dmean_orchestrator.storage.keys import partial_key, result_key
 
 log = structlog.get_logger()
@@ -52,7 +53,10 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         store: TaskStore,
         jobs: JobStore,
         on_fatal: Callable[[BaseException], None],
+        cleaner: Cleaner | None = None,
     ) -> None:
+        self._cleaner = cleaner
+        self._background: set[asyncio.Task[None]] = set()
         self._settings = settings
         self._store = store
         self._job_store = jobs
@@ -130,6 +134,13 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         except Exception as err:
             self._fatal(err)
 
+    async def rebuild(self) -> None:
+        """On startup: every running job back into memory, leased tasks with grace leases."""
+        job_ids = await self._store.running_job_ids()
+        for job_id in job_ids:
+            await self.load_job(job_id)
+        log.info("rebuilt from postgres", running_jobs=len(job_ids), tasks=len(self.queue.tasks))
+
     async def plan_queued(self) -> None:
         for job_id in await self._job_store.queued_job_ids():
             await self.plan(job_id)
@@ -170,6 +181,10 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
             pool=[Partial(file_id, n) for file_id, n in snap.unmerged],
         )
         self.queue.add_job(job_id, snap.created_at.timestamp())
+        for r in snap.running:  # was leased when we stopped: its worker may still be working
+            self.queue.restore_leased(
+                r.task_id, job_id, Kind(r.kind), attempt=r.attempts, worker_id=r.worker_id, now=now
+            )
         for t in snap.pending:
             self.queue.add_task(
                 t.task_id,
@@ -216,6 +231,7 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
             log.info("job succeeded", job_id=job_id)
             self.queue.remove_job(job_id)
             self._jobs.pop(job_id, None)
+            self._clean_later(job_id)
             return
         job = self._jobs.get(job_id)
         if job is None:
@@ -275,6 +291,35 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         self._jobs.pop(job_id, None)
         await self._store.fail_job(job_id, task_id, failure_type, error)
         log.warning("job failed", job_id=job_id, failure_type=failure_type, error=error)
+        self._clean_later(job_id)
+
+    def _clean_later(self, job_id: int) -> None:
+        """Deletes a finished job's inputs and partials in the background. A failure is only
+        logged: the periodic sweep retries it."""
+        if self._cleaner is None:
+            return
+        cleaner = self._cleaner
+
+        async def clean() -> None:
+            try:
+                await cleaner.clean_job(job_id)
+            except Exception as err:
+                log.warning("cleanup failed, the sweep will retry", job_id=job_id, error=repr(err))
+
+        task = asyncio.create_task(clean())
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def run_cleanup(self, interval_secs: float) -> None:
+        """Periodic sweep: interrupted cleanups and expired uploads."""
+        if self._cleaner is None:
+            return
+        while True:
+            try:
+                await self._cleaner.sweep()
+            except Exception as err:
+                log.warning("cleanup sweep failed, retrying next round", error=repr(err))
+            await asyncio.sleep(interval_secs)
 
     async def _on_timers(self) -> None:
         now = self._now()

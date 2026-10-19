@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Plans jobs into tasks and serves them to workers through a fair, lease-based task queue"
 requires-python = ">=3.13"
 dependencies = [
+  "boto3==1.43.114",
   "grpcio==1.84.0",
   "protobuf==7.36.2",
   "psycopg[binary]==3.3.6",

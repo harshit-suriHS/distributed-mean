@@ -37,6 +37,14 @@ class PendingTask:
 
 
 @dataclass(frozen=True)
+class RunningTask:
+    task_id: int
+    kind: str
+    attempts: int
+    worker_id: str
+
+
+@dataclass(frozen=True)
 class DoneTask:
     job_id: int
     is_final: bool
@@ -50,6 +58,7 @@ class JobSnapshot:
     no_of_files: int
     files_per_task: int
     pending: list[PendingTask]
+    running: list[RunningTask]  # leased when the orchestrator stopped: restored with grace leases
     unmerged: list[tuple[int, int]]  # (file_id, no_of_files) of partials no merge has taken yet
 
 
@@ -193,6 +202,13 @@ class TaskStore:
                     (job_id,),
                 )
             ).fetchall()
+            running = await (
+                await conn.execute(
+                    """SELECT id, kind, attempts, coalesce(worker_id, '')
+                         FROM tasks WHERE job_id = %s AND status = 'running' ORDER BY id""",
+                    (job_id,),
+                )
+            ).fetchall()
             unmerged = await (
                 await conn.execute(
                     """SELECT f.id, f.no_of_files FROM files f
@@ -207,5 +223,13 @@ class TaskStore:
             no_of_files=int(job[1]),
             files_per_task=int(job[2] or 1),
             pending=[PendingTask(int(r[0]), str(r[1]), int(r[2]), float(r[3])) for r in pending],
+            running=[RunningTask(int(r[0]), str(r[1]), int(r[2]), str(r[3])) for r in running],
             unmerged=[(int(r[0]), int(r[1])) for r in unmerged],
         )
+
+    async def running_job_ids(self) -> list[int]:
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute("SELECT id FROM jobs WHERE status = 'running' ORDER BY id")
+            ).fetchall()
+        return [int(r[0]) for r in rows]

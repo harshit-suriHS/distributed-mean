@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     orchestrator_db_password: str
     db_pool_size: int = 10
 
+    s3_endpoint: str
+    s3_region: str = "us-east-1"
+    s3_access_key: str
+    s3_secret_key: str
+    s3_bucket: str
+
+    advisory_lock_key: int = 4242  # only one orchestrator holds it; a second copy waits
+    cleanup_interval_secs: float = 300.0  # sweep: interrupted cleanups, expired uploads
+
     grpc_host: str = "0.0.0.0"
     grpc_port: int = 50051
 

@@ -2,20 +2,27 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+import boto3
 import grpc
 import psycopg
 import pytest
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from psycopg_pool import AsyncConnectionPool
 
+from dmean_orchestrator.database.cleanup_store import CleanupStore
 from dmean_orchestrator.database.job_store import JobStore
 from dmean_orchestrator.database.task_store import TaskStore
 from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
 from dmean_orchestrator.rpc.service import TaskQueueService
 from dmean_orchestrator.settings import Settings
+from dmean_orchestrator.storage.cleanup import Cleaner
+from dmean_orchestrator.storage.s3 import ObjectStore
 
 
 class IntegrationSettings(Settings):
@@ -47,12 +54,20 @@ class Orchestrator:
     fatal: list[BaseException]
 
 
-@pytest.fixture
-async def orch(settings: IntegrationSettings) -> AsyncIterator[Orchestrator]:
+@asynccontextmanager
+async def start_orchestrator(
+    settings: IntegrationSettings, *, rebuild: bool = False
+) -> AsyncGenerator[Orchestrator]:
+    """One orchestrator instance; tests can start a second one to simulate a restart."""
     fatal: list[BaseException] = []
     async with AsyncConnectionPool(settings.db_dsn, min_size=1, max_size=5, open=False) as pool:
         await pool.wait()
-        service = TaskQueueService(settings, TaskStore(pool), JobStore(pool), fatal.append)
+        cleaner = Cleaner(CleanupStore(pool), ObjectStore(settings))
+        service = TaskQueueService(
+            settings, TaskStore(pool), JobStore(pool), fatal.append, cleaner=cleaner
+        )
+        if rebuild:
+            await service.rebuild()
         server = grpc.aio.server()
         pb_grpc.add_TaskQueueServicer_to_server(service, server)
         port = server.add_insecure_port("127.0.0.1:0")
@@ -70,12 +85,40 @@ async def orch(settings: IntegrationSettings) -> AsyncIterator[Orchestrator]:
     assert fatal == [], f"orchestrator hit a fatal error: {fatal}"
 
 
+@pytest.fixture
+async def orch(settings: IntegrationSettings) -> AsyncIterator[Orchestrator]:
+    async with start_orchestrator(settings) as orchestrator:
+        yield orchestrator
+
+
+@pytest.fixture(scope="session")
+def objects(settings: IntegrationSettings) -> Any:
+    """A plain boto3 client to create and inspect objects in MinIO."""
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint,
+        region_name=settings.s3_region,
+        aws_access_key_id=settings.s3_access_key,
+        aws_secret_access_key=settings.s3_secret_key,
+        config=Config(s3={"addressing_style": "path"}),
+    )
+
+
+def object_exists(objects: Any, bucket: str, key: str) -> bool:
+    try:
+        objects.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError:
+        return False
+
+
 @dataclass
 class Db:
     """Creates jobs, input files and pending tasks the way the API and planner would."""
 
     admin: psycopg.Connection[tuple[Any, ...]]
     job_ids: list[int] = field(default_factory=list[int])
+    upload_uuids: list[str] = field(default_factory=list[str])
 
     def job(self, no_of_files: int, columns: int = 3) -> tuple[int, str]:
         row = self.admin.execute(
@@ -116,6 +159,44 @@ class Db:
         ).fetchall()
         keys = ["id", "kind", "no_of_files", "is_final", "status", "inputs"]
         return [dict(zip(keys, r, strict=True)) for r in rows]
+
+    def files(self, job_id: int) -> list[dict[str, Any]]:
+        rows = self.admin.execute(
+            """SELECT id, type, key, deleted_at IS NOT NULL FROM files
+                WHERE job_id = %s ORDER BY id""",
+            (job_id,),
+        ).fetchall()
+        return [dict(zip(["id", "type", "key", "deleted"], r, strict=True)) for r in rows]
+
+    def fake_done(self, task_id: int, key: str) -> None:
+        """As if the task's done was committed and the orchestrator then crashed."""
+        row = self.admin.execute(
+            "UPDATE tasks SET status = 'done' WHERE id = %s RETURNING job_id, no_of_files",
+            (task_id,),
+        ).fetchone()
+        assert row is not None
+        self.admin.execute(
+            """INSERT INTO files (job_id, type, key, no_of_files, produced_by)
+               VALUES (%s, 'partial', %s, %s, %s)""",
+            (row[0], key, row[1], task_id),
+        )
+
+    def upload(self, *, expired: bool, committed_job: int | None = None) -> str:
+        row = self.admin.execute(
+            """INSERT INTO uploads (status, job_id, expires_at)
+               VALUES (%s, %s, now() + %s * interval '1 hour') RETURNING uuid::text""",
+            ("committed" if committed_job else "open", committed_job, -1 if expired else 24),
+        ).fetchone()
+        assert row is not None
+        self.upload_uuids.append(str(row[0]))
+        return str(row[0])
+
+    def upload_status(self, upload_uuid: str) -> str:
+        row = self.admin.execute(
+            "SELECT status FROM uploads WHERE uuid = %s", (upload_uuid,)
+        ).fetchone()
+        assert row is not None
+        return str(row[0])
 
     def files_used_twice(self, job_id: int) -> int:
         row = self.admin.execute(
@@ -175,6 +256,7 @@ class Db:
         ]
 
     def cleanup(self) -> None:
+        self.admin.execute("DELETE FROM uploads WHERE uuid = ANY(%s::uuid[])", (self.upload_uuids,))
         ids = self.job_ids
         self.admin.execute(
             "DELETE FROM task_files WHERE task_id IN (SELECT id FROM tasks WHERE job_id = ANY(%s))",
