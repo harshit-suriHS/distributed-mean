@@ -3,10 +3,26 @@ name = "dmean-orchestrator"
 version = "0.1.0"
 description = "Plans jobs into tasks and serves them to workers through a fair, lease-based task queue"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "grpcio==1.84.0",
+  "protobuf==7.36.2",
+  "psycopg[binary]==3.3.6",
+  "psycopg-pool==3.3.3",
+  "pydantic-settings==2.16.0",
+  "structlog==26.1.0",
+]
+
+[project.scripts]
+dmean-orchestrator = "dmean_orchestrator.main:main"
 
 [dependency-groups]
-dev = ["pytest==9.1.1", "ruff==0.17.1", "pyright==1.1.414"]
+dev = [
+  "grpcio-tools==1.84.0",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "ruff==0.17.1",
+  "pyright==1.1.414",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -18,6 +34,7 @@ packages = ["src/dmean_orchestrator"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+extend-exclude = ["src/dmean_orchestrator/rpc/*_pb2*.py*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
@@ -29,6 +46,17 @@ typeCheckingMode = "strict"
 pythonVersion = "3.13"
 venvPath = "."
 venv = ".venv"
+exclude = ["**/*_pb2*", ".venv"]
+# grpc and psycopg_pool ship partial types; don't fail on their internals
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownParameterType = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = ["integration: needs docker compose (postgres)"]
