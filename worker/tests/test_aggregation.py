@@ -2,25 +2,23 @@ import numpy as np
 import pytest
 
 from dmean_worker.processing.aggregation import TaskFailed, render_output, sum_inputs
+from dmean_worker.processing.outcome import FailureType
 from dmean_worker.processing.task import Task
-from dmean_worker.queue.messages import FailureType
 from dmean_worker.storage.csv_format import format_row, parse_input, read_partial, write_partial
 
 
 def make_task(
     kind: str, keys: list[str], no_of_files: int, columns: int = 3, *, final: bool = False
-):
+) -> Task:
     return Task(
-        id=1,
-        job_id=1,
-        job_uuid="j",
+        task_id=1,
+        attempt=1,
         kind=kind,
-        no_of_files=no_of_files,
-        is_final=final,
-        status="running",
-        no_of_columns=columns,
-        job_status="running",
         input_keys=keys,
+        no_of_files=no_of_files,
+        no_of_columns=columns,
+        is_final=final,
+        output_key="out.csv",
     )
 
 

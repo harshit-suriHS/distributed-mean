@@ -1,13 +1,13 @@
 [project]
 name = "dmean-worker"
 version = "0.1.0"
-description = "Dramatiq worker: sums a task's input files into one partial (or the final result)"
+description = "Leases tasks from the orchestrator over gRPC and sums their input files into one output"
 requires-python = ">=3.13"
 dependencies = [
   "boto3==1.43.114",
-  "dramatiq[redis]==2.2.1",
+  "grpcio==1.84.0",
   "numpy==2.5.4",
-  "psycopg[binary]==3.3.6",
+  "protobuf==7.36.2",
   "pydantic-settings==2.16.0",
   "structlog==26.1.0",
 ]
@@ -16,7 +16,7 @@ dependencies = [
 dmean-worker = "dmean_worker.main:main"
 
 [dependency-groups]
-dev = ["pytest==9.1.1", "ruff==0.17.1", "pyright==1.1.414"]
+dev = ["grpcio-tools==1.84.0", "pytest==9.1.1", "ruff==0.17.1", "pyright==1.1.414"]
 
 [build-system]
 requires = ["hatchling"]
@@ -28,6 +28,7 @@ packages = ["src/dmean_worker"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+extend-exclude = ["src/dmean_worker/rpc/*_pb2*.py*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
@@ -39,12 +40,14 @@ typeCheckingMode = "strict"
 pythonVersion = "3.13"
 venvPath = "."
 venv = ".venv"
-# boto3 and dramatiq ship partial stubs; don't fail on their internals
+exclude = ["**/*_pb2*", ".venv"]
+# boto3 and grpc ship partial stubs; don't fail on their internals
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
 reportUnknownVariableType = false
 reportUnknownArgumentType = false
+reportUnknownParameterType = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: needs docker compose (postgres, redis, minio)"]
+markers = ["integration: needs docker compose (minio)"]

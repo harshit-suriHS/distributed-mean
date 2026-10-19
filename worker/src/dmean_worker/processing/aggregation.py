@@ -1,11 +1,11 @@
-"""The actual work, free of Dramatiq, Postgres and S3 so it can be unit tested."""
+"""The actual work, free of gRPC and S3 so it can be unit tested."""
 
 from collections.abc import Callable
 
 import numpy as np
 
+from dmean_worker.processing.outcome import FailureType
 from dmean_worker.processing.task import Task
-from dmean_worker.queue.messages import FailureType
 from dmean_worker.storage.csv_format import (
     InvalidInput,
     Vector,

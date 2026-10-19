@@ -1,0 +1,76 @@
+// Worker ↔ orchestrator contract. The worker keeps an identical copy of this file.
+syntax = "proto3";
+
+package dmean.v1;
+
+service TaskQueue {
+  // Long-poll: waits up to wait_seconds for a task. An empty response means "ask again".
+  rpc Lease(LeaseRequest) returns (LeaseResponse);
+  // Renews the lease every heartbeat_seconds. STOP: the job failed or the lease is lost.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // Idempotent: safe to retry until the orchestrator answers.
+  rpc Report(ReportRequest) returns (ReportResponse);
+}
+
+message LeaseRequest {
+  string worker_id = 1;
+  uint32 wait_seconds = 2;
+}
+
+message LeaseResponse {
+  optional Task task = 1;
+}
+
+message Task {
+  int64 task_id = 1;
+  uint32 attempt = 2;              // fencing token: sent back with every heartbeat and report
+  string kind = 3;                 // map | merge
+  repeated string input_keys = 4;  // uploaded CSVs (map) or partials (merge)
+  uint32 no_of_files = 5;          // original files covered; the summed count must equal this
+  uint32 no_of_columns = 6;
+  bool is_final = 7;               // write the mean instead of a partial
+  string output_key = 8;
+  uint32 heartbeat_seconds = 9;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  int64 task_id = 2;
+  uint32 attempt = 3;
+}
+
+message HeartbeatResponse {
+  enum Action {
+    CONTINUE = 0;
+    STOP = 1;
+  }
+  Action action = 1;
+}
+
+message ReportRequest {
+  string worker_id = 1;
+  int64 task_id = 2;
+  uint32 attempt = 3;
+  oneof outcome {
+    Done done = 4;
+    Failed failed = 5;
+  }
+}
+
+message Done {
+  string output_key = 1;
+  int64 size_bytes = 2;
+}
+
+enum FailureType {
+  INTERNAL = 0;
+  USER_INPUT = 1;
+}
+
+message Failed {
+  FailureType failure_type = 1;
+  bool retryable = 2;
+  string error = 3;
+}
+
+message ReportResponse {}

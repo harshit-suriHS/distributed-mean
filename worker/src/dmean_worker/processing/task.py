@@ -1,29 +1,32 @@
-"""A task as the worker sees it: what to read, where to write, whether to run at all."""
+"""A leased task, as the orchestrator sends it: everything needed to run it, no database."""
 
 from dataclasses import dataclass
 
-from dmean_worker.storage.keys import partial_key, result_key
-
-FINISHED_TASK_STATUSES = frozenset({"done", "failed", "skipped"})
+from dmean_worker.rpc import task_queue_pb2 as pb
 
 
 @dataclass(frozen=True)
 class Task:
-    id: int
-    job_id: int
-    job_uuid: str
+    task_id: int
+    attempt: int  # fencing token: sent back with every heartbeat and report
     kind: str  # map | merge
-    no_of_files: int
-    is_final: bool
-    status: str
-    no_of_columns: int
-    job_status: str
     input_keys: list[str]
+    no_of_files: int
+    no_of_columns: int
+    is_final: bool
+    output_key: str
+    heartbeat_seconds: int = 10
 
-    @property
-    def output_key(self) -> str:
-        return result_key(self.job_uuid) if self.is_final else partial_key(self.job_uuid, self.id)
-
-    @property
-    def should_run(self) -> bool:
-        return self.job_status == "running" and self.status not in FINISHED_TASK_STATUSES
+    @classmethod
+    def from_proto(cls, task: pb.Task) -> "Task":
+        return cls(
+            task_id=task.task_id,
+            attempt=task.attempt,
+            kind=task.kind,
+            input_keys=list(task.input_keys),
+            no_of_files=task.no_of_files,
+            no_of_columns=task.no_of_columns,
+            is_final=task.is_final,
+            output_key=task.output_key,
+            heartbeat_seconds=task.heartbeat_seconds or 10,
+        )

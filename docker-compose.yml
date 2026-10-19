@@ -34,7 +34,6 @@ services:
       psql -v ON_ERROR_STOP=1 -q
            -v api_pw=${API_DB_PASSWORD}
            -v orchestrator_pw=${ORCHESTRATOR_DB_PASSWORD}
-           -v worker_pw=${WORKER_DB_PASSWORD}
            -f /roles.sql
     restart: "no"
 

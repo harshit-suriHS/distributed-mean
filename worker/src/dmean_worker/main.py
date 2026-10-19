@@ -1,77 +1,77 @@
-"""Worker process: 1 process, 1 thread, prefetch 1. SIGTERM drains (finishes the current task)."""
+"""
+Worker process: Lease → run → Report, one task at a time.
 
+SIGTERM drains: an idle long-poll is cancelled at once; a running task finishes and is reported.
+"""
+
+import os
 import signal
+import socket
 import threading
+import time
 
-import dramatiq
-import redis
+import grpc
 import structlog
-from dramatiq.brokers.redis import RedisBroker
 
-from dmean_worker.database.task_reader import TaskReader
 from dmean_worker.logs import configure_logging
+from dmean_worker.processing.outcome import Abandoned
 from dmean_worker.processing.runner import TaskRunner
-from dmean_worker.queue.actor import declare, set_runner
-from dmean_worker.queue.heartbeat import Heartbeat, make_worker_id
-from dmean_worker.queue.messages import TASKS_QUEUE
+from dmean_worker.queue.client import TaskQueueClient
+from dmean_worker.queue.heartbeat import LeaseKeeper
 from dmean_worker.settings import Settings
 from dmean_worker.storage.s3 import Storage
 
 log = structlog.get_logger()
 
 
-def build_worker(settings: Settings, worker_id: str) -> tuple[dramatiq.Worker, TaskReader]:
-    broker = RedisBroker(url=settings.redis_url)
-    dramatiq.set_broker(broker)
-    broker.add_middleware(
-        Heartbeat(
-            redis.Redis.from_url(settings.redis_url),
-            worker_id,
-            settings.heartbeat_ttl_secs,
-            settings.heartbeat_every_secs,
-        )
-    )
-    declare(broker, settings.task_time_limit_secs)
+def make_worker_id() -> str:
+    return f"{socket.gethostname()}-{os.getpid()}"
 
-    reader = TaskReader(settings.db_dsn)
-    set_runner(
-        TaskRunner(
-            broker=broker,
-            reader=reader,
-            storage=Storage(settings),
-            worker_id=worker_id,
-            job_check_secs=settings.job_check_secs,
-        )
-    )
 
-    worker = dramatiq.Worker(broker, queues={TASKS_QUEUE}, worker_threads=1)
-    # Dramatiq's default prefetch is threads × 2: a busy worker would hold a second task
-    # that an idle worker should get. One in flight per worker is the admission rule.
-    worker.queue_prefetch = 1
-    return worker, reader
+def run_worker(
+    settings: Settings, client: TaskQueueClient, runner: TaskRunner, draining: threading.Event
+) -> None:
+    backoff = 1.0
+    while not draining.is_set():
+        try:
+            task = client.lease(settings.lease_wait_secs, cancel=draining)
+            backoff = 1.0
+        except grpc.RpcError as err:
+            log.warning("orchestrator unreachable", error=str(err.code()), retry_in=backoff)
+            draining.wait(backoff)
+            backoff = min(backoff * 2, 30.0)
+            continue
+        if task is None:
+            continue  # no work within the wait: ask again
+        with structlog.contextvars.bound_contextvars(task_id=task.task_id, attempt=task.attempt):
+            log.info("leased", kind=task.kind, files=task.no_of_files, final=task.is_final)
+            with LeaseKeeper(client, task) as keeper:
+                outcome = runner.run(task, should_stop=keeper.stopped.is_set)
+            if not isinstance(outcome, Abandoned):
+                client.report(task, outcome, settings.report_give_up_secs)
 
 
 def main() -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]  # values come from env
     configure_logging(settings.log_level, "worker")
     worker_id = make_worker_id()
-    worker, reader = build_worker(settings, worker_id)
+    structlog.contextvars.bind_contextvars(worker_id=worker_id)
 
-    stop = threading.Event()
+    draining = threading.Event()
 
     def on_signal(signum: int, frame: object) -> None:
-        stop.set()
+        draining.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, on_signal)
 
-    worker.start()
-    log.info("worker started", worker_id=worker_id)
-    stop.wait()
-    log.info("draining: finishing the current task", worker_id=worker_id)
-    worker.stop(timeout=settings.task_time_limit_secs * 1000)
-    reader.close()
-    log.info("worker stopped", worker_id=worker_id)
+    client = TaskQueueClient(settings.orchestrator_addr, worker_id)
+    runner = TaskRunner(Storage(settings), settings.slowdown_secs_per_file)
+    log.info("worker started", orchestrator=settings.orchestrator_addr)
+    started = time.monotonic()
+    run_worker(settings, client, runner, draining)
+    client.close()
+    log.info("worker stopped", uptime_secs=round(time.monotonic() - started))
 
 
 if __name__ == "__main__":
