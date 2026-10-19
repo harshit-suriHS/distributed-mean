@@ -41,7 +41,6 @@ export interface JobView {
   completed_at: Date | null;
   files_done: number;
   pending: number;
-  sent: number;
   running: number;
   done: number;
   failed: number;
@@ -55,7 +54,6 @@ export async function findJobByUuid(db: Db, uuid: string) {
             coalesce(sum(t.no_of_files) FILTER (WHERE t.kind = 'map' AND t.status = 'done'), 0)::int
               AS files_done,
             count(t.id) FILTER (WHERE t.status = 'pending')::int AS pending,
-            count(t.id) FILTER (WHERE t.status = 'sent')::int    AS sent,
             count(t.id) FILTER (WHERE t.status = 'running')::int AS running,
             count(t.id) FILTER (WHERE t.status = 'done')::int    AS done,
             count(t.id) FILTER (WHERE t.status = 'failed')::int  AS failed,

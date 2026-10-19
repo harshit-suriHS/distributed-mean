@@ -36,7 +36,6 @@ export const JobResponse = z.object({
   }),
   tasks: z.object({
     pending: z.int(),
-    sent: z.int(),
     running: z.int(),
     done: z.int(),
     failed: z.int(),
@@ -67,7 +66,6 @@ export function toJobResponse(job: JobView): z.input<typeof JobResponse> {
     },
     tasks: {
       pending: job.pending,
-      sent: job.sent,
       running: job.running,
       done: job.done,
       failed: job.failed,
