@@ -4,6 +4,7 @@ import { pinoHttp } from "pino-http";
 import type { Config } from "./config.js";
 import { errorHandler, notFound } from "./lib/errors.js";
 import type { Logger } from "./lib/logger.js";
+import { eventsRouter } from "./modules/events/events.routes.js";
 import { jobsRouter } from "./modules/jobs/jobs.routes.js";
 import { statsRouter } from "./modules/stats/stats.routes.js";
 import { uploadsRouter } from "./modules/uploads/uploads.routes.js";
@@ -34,6 +35,7 @@ export function createApp(deps: Deps) {
   app.use("/jobs", jobsRouter(deps));
   app.use("/workers", workersRouter(deps));
   app.use("/stats", statsRouter(deps));
+  app.use("/events", eventsRouter(deps));
 
   app.use(() => {
     throw notFound("route");

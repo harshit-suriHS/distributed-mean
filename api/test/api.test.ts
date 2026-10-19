@@ -456,3 +456,74 @@ describe("GET /stats", () => {
     await admin.query("DELETE FROM tasks WHERE job_id = $1", [job.id]);
   });
 });
+
+describe("GET /events (SSE)", () => {
+  it("streams a workers snapshot and logs what changed", async () => {
+    workersSnapshot = {
+      readyTasks: 0,
+      workers: [
+        {
+          workerId: "w1",
+          busy: false,
+          taskId: "0",
+          jobId: "0",
+          kind: "",
+          attempt: 0,
+          secondsOnTask: 0,
+          secondsSinceSeen: 0.1,
+        },
+      ],
+    };
+    const server = app.listen(0);
+    const port = (server.address() as { port: number }).port;
+    const controller = new AbortController();
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/events`, { signal: controller.signal });
+      expect(res.headers.get("content-type")).toMatch(/^text\/event-stream/);
+      if (!res.body) throw new Error("no stream");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      const readUntil = async (needle: string) => {
+        while (!text.includes(needle)) {
+          const { value } = await reader.read();
+          text += decoder.decode(value);
+        }
+      };
+      await readUntil("event: workers");
+      expect(text).toContain('"live":1');
+      // a second worker joins and the first starts a retried task
+      workersSnapshot = {
+        readyTasks: 0,
+        workers: [
+          {
+            workerId: "w1",
+            busy: true,
+            taskId: "7",
+            jobId: "0",
+            kind: "merge",
+            attempt: 2,
+            secondsOnTask: 1,
+            secondsSinceSeen: 0.1,
+          },
+          {
+            workerId: "w2",
+            busy: false,
+            taskId: "0",
+            jobId: "0",
+            kind: "",
+            attempt: 0,
+            secondsOnTask: 0,
+            secondsSinceSeen: 0.1,
+          },
+        ],
+      };
+      await readUntil("worker w2 joined");
+      await readUntil("worker w1 started merge task 7 (attempt 2)");
+    } finally {
+      controller.abort();
+      server.close();
+      workersSnapshot = { workers: [], readyTasks: 0 };
+    }
+  });
+});
