@@ -1,0 +1,317 @@
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1c2430;
+  --muted: #6b7686;
+  --line: #e3e7ed;
+  --blue: #2f6fde;
+  --green: #1f9d55;
+  --red: #d64545;
+  --amber: #c98a12;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --card: #1a2029;
+    --text: #e6eaf0;
+    --muted: #8a95a5;
+    --line: #2a323d;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0 0 16px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 0 0 12px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mono {
+  font-family: ui-monospace, monospace;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.stat .value {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.stat .label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stat.blue .value {
+  color: var(--blue);
+}
+.stat.green .value {
+  color: var(--green);
+}
+.stat.red .value {
+  color: var(--red);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.grid .wide {
+  grid-column: span 1;
+}
+
+@media (min-width: 900px) {
+  .grid:last-child {
+    grid-template-columns: 2fr 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+button {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+button.primary {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: white;
+  padding: 8px 14px;
+  margin-top: 12px;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.scale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.worker {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--muted);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 13px;
+}
+
+.worker.busy {
+  border-left-color: var(--green);
+}
+
+.worker-id {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.retry {
+  color: var(--amber);
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tabs button.active {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.form {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: end;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input[type="number"] {
+  width: 130px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+td {
+  padding: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+tr.clickable {
+  cursor: pointer;
+}
+
+tr.details td {
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.badge {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 12px;
+  background: var(--line);
+}
+
+.badge.running {
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+  color: var(--blue);
+}
+.badge.succeeded {
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+  color: var(--green);
+}
+.badge.failed {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+  color: var(--red);
+}
+
+.bar {
+  height: 6px;
+  background: var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  min-width: 80px;
+}
+
+.fill {
+  height: 100%;
+  background: var(--blue);
+  transition: width 0.4s ease;
+}
+
+.fill.succeeded {
+  background: var(--green);
+}
+.fill.failed {
+  background: var(--red);
+}
+
+.log {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.line {
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.line.warn {
+  color: var(--amber);
+}
+
+.error {
+  color: var(--red);
+  font-size: 13px;
+}

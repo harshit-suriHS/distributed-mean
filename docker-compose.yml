@@ -143,6 +143,14 @@ services:
     restart: always
     init: true
 
+  ui:
+    build: ./ui
+    ports:
+      - "${UI_PORT:-8080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   minio-data:
