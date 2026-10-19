@@ -17,7 +17,7 @@ def make_task(
         kind=kind,
         no_of_files=no_of_files,
         is_final=final,
-        status="sent",
+        status="running",
         no_of_columns=columns,
         job_status="running",
         input_keys=keys,

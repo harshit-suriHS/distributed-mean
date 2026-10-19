@@ -124,7 +124,7 @@ CREATE TABLE public.settings (
     id integer DEFAULT 1 NOT NULL,
     desired_workers integer DEFAULT 4 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT settings_desired_workers_check CHECK (((desired_workers >= 0) AND (desired_workers <= 64))),
+    CONSTRAINT settings_desired_workers_check CHECK (((desired_workers >= 0) AND (desired_workers <= 10000))),
     CONSTRAINT settings_id_check CHECK ((id = 1))
 );
 
@@ -154,13 +154,13 @@ CREATE TABLE public.tasks (
     worker_id text,
     error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    sent_at timestamp with time zone,
     started_at timestamp with time zone,
     completed_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    not_before timestamp with time zone,
     CONSTRAINT tasks_kind_check CHECK ((kind = ANY (ARRAY['map'::text, 'merge'::text]))),
     CONSTRAINT tasks_no_of_files_check CHECK ((no_of_files > 0)),
-    CONSTRAINT tasks_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'sent'::text, 'running'::text, 'done'::text, 'failed'::text, 'skipped'::text])))
+    CONSTRAINT tasks_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'done'::text, 'failed'::text, 'skipped'::text])))
 );
 
 
@@ -422,4 +422,5 @@ ALTER TABLE ONLY public.uploads
 INSERT INTO public.schema_migrations (version) VALUES
     ('20261018000001'),
     ('20261018000002'),
-    ('20261019000001');
+    ('20261019000001'),
+    ('20261019000002');

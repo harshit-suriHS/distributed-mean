@@ -113,7 +113,7 @@ class Db:
         no_of_files: int,
         *,
         final: bool = False,
-        status: str = "sent",
+        status: str = "running",
     ) -> int:
         row = self.admin.execute(
             """INSERT INTO tasks (job_id, kind, no_of_files, is_final, status)
