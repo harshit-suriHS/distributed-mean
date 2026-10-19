@@ -1,4 +1,4 @@
-"""Settings shared by every Python service, read from env (and the repo's .env when present)."""
+"""Worker settings, read from env (and the repo's .env when present)."""
 
 from pathlib import Path
 
@@ -15,12 +15,13 @@ def find_env_file(start: Path | None = None) -> Path | None:
     return None
 
 
-class CommonSettings(BaseSettings):
+class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=find_env_file(), extra="ignore")
 
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str
+    worker_db_password: str
 
     redis_host: str = "localhost"
     redis_port: int = 6379
@@ -31,6 +32,11 @@ class CommonSettings(BaseSettings):
     s3_access_key: str
     s3_secret_key: str
     s3_bucket: str
+
+    task_time_limit_secs: int = 250  # ~10 × target task duration: catches hangs
+    job_check_secs: float = 3.0  # how often a running task re-reads its job's status
+    heartbeat_ttl_secs: int = 30
+    heartbeat_every_secs: int = 10
 
     log_level: str = "info"
 
@@ -43,3 +49,7 @@ class CommonSettings(BaseSettings):
             f"host={self.postgres_host} port={self.postgres_port} dbname={self.postgres_db} "
             f"user={user} password={password}"
         )
+
+    @property
+    def db_dsn(self) -> str:
+        return self.postgres_dsn("worker_ro", self.worker_db_password)

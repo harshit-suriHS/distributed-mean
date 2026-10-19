@@ -6,21 +6,21 @@ import threading
 import dramatiq
 import redis
 import structlog
-from dmean_common.logging import configure_logging
-from dmean_common.messages import TASKS_QUEUE
-from dmean_common.storage import Storage
 from dramatiq.brokers.redis import RedisBroker
 
-from .actors import declare, set_runner
-from .db import TaskReader
-from .heartbeat import Heartbeat, make_worker_id
-from .runner import TaskRunner
-from .settings import WorkerSettings
+from dmean_worker.database.task_reader import TaskReader
+from dmean_worker.logs import configure_logging
+from dmean_worker.processing.runner import TaskRunner
+from dmean_worker.queue.actor import declare, set_runner
+from dmean_worker.queue.heartbeat import Heartbeat, make_worker_id
+from dmean_worker.queue.messages import TASKS_QUEUE
+from dmean_worker.settings import Settings
+from dmean_worker.storage.s3 import Storage
 
 log = structlog.get_logger()
 
 
-def build_worker(settings: WorkerSettings, worker_id: str) -> tuple[dramatiq.Worker, TaskReader]:
+def build_worker(settings: Settings, worker_id: str) -> tuple[dramatiq.Worker, TaskReader]:
     broker = RedisBroker(url=settings.redis_url)
     dramatiq.set_broker(broker)
     broker.add_middleware(
@@ -52,7 +52,7 @@ def build_worker(settings: WorkerSettings, worker_id: str) -> tuple[dramatiq.Wor
 
 
 def main() -> None:
-    settings = WorkerSettings()  # pyright: ignore[reportCallIssue]  # values come from env
+    settings = Settings()  # pyright: ignore[reportCallIssue]  # values come from env
     configure_logging(settings.log_level, "worker")
     worker_id = make_worker_id()
     worker, reader = build_worker(settings, worker_id)

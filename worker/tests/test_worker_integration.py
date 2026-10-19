@@ -7,12 +7,13 @@ import numpy as np
 import pytest
 import redis
 from conftest import Db, IntegrationSettings, collect_reports
-from dmean_common.csvio import format_row, parse_input, read_partial, write_partial
-from dmean_common.messages import FailureType, ReportEvent, run_task_message
-from dmean_common.storage import Storage
-from dmean_worker.main import build_worker
-from dmean_worker.runner import TaskRunner
 from dramatiq.brokers.redis import RedisBroker
+
+from dmean_worker.main import build_worker
+from dmean_worker.processing.runner import TaskRunner
+from dmean_worker.queue.messages import FailureType, ReportEvent, run_task_message
+from dmean_worker.storage.csv_format import format_row, parse_input, read_partial, write_partial
+from dmean_worker.storage.s3 import Storage
 
 pytestmark = pytest.mark.integration
 

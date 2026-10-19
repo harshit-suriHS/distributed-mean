@@ -6,12 +6,13 @@ from collections.abc import Callable
 import dramatiq
 import redis.exceptions
 import structlog
-from dmean_common.messages import FailureType, Report, ReportEvent, report_message
-from dmean_common.storage import Storage
 from dramatiq.middleware.time_limit import TimeLimitExceeded
 
-from .compute import TaskFailed, render_output, sum_inputs
-from .db import Task, TaskReader
+from dmean_worker.database.task_reader import TaskReader
+from dmean_worker.processing.aggregation import TaskFailed, render_output, sum_inputs
+from dmean_worker.processing.task import Task
+from dmean_worker.queue.messages import FailureType, Report, ReportEvent, report_message
+from dmean_worker.storage.s3 import Storage
 
 log = structlog.get_logger()
 

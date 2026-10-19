@@ -6,11 +6,11 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from .config import CommonSettings
+from dmean_worker.settings import Settings
 
 
 class Storage:
-    def __init__(self, settings: CommonSettings) -> None:
+    def __init__(self, settings: Settings) -> None:
         self.bucket = settings.s3_bucket
         self._s3: Any = boto3.client(
             "s3",

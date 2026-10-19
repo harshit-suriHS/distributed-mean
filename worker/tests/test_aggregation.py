@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
-from dmean_common.csvio import format_row, parse_input, read_partial, write_partial
-from dmean_common.messages import FailureType
-from dmean_worker.compute import TaskFailed, render_output, sum_inputs
-from dmean_worker.db import Task
+
+from dmean_worker.processing.aggregation import TaskFailed, render_output, sum_inputs
+from dmean_worker.processing.task import Task
+from dmean_worker.queue.messages import FailureType
+from dmean_worker.storage.csv_format import format_row, parse_input, read_partial, write_partial
 
 
 def make_task(

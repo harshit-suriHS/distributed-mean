@@ -2,13 +2,6 @@ version = 1
 revision = 5
 requires-python = ">=3.13"
 
-[manifest]
-members = [
-    "distributed-mean-python",
-    "dmean-common",
-    "dmean-worker",
-]
-
 [[package]]
 name = "annotated-types"
 version = "0.8.0"
@@ -56,40 +49,23 @@ wheels = [
 ]
 
 [[package]]
-name = "distributed-mean-python"
+name = "dmean-worker"
 version = "0.1.0"
-source = { virtual = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "dmean-common" },
-    { name = "dmean-worker" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "dmean-common", editable = "packages/common" },
-    { name = "dmean-worker", editable = "apps/worker" },
-    { name = "pyright", specifier = "==1.1.414" },
-    { name = "pytest", specifier = "==9.1.1" },
-    { name = "ruff", specifier = "==0.17.1" },
-]
-
-[[package]]
-name = "dmean-common"
-version = "0.1.0"
-source = { editable = "packages/common" }
+source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "dramatiq", extra = ["redis"] },
     { name = "numpy" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "structlog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pyright" },
+    { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -97,23 +73,16 @@ requires-dist = [
     { name = "boto3", specifier = "==1.43.114" },
     { name = "dramatiq", extras = ["redis"], specifier = "==2.2.1" },
     { name = "numpy", specifier = "==2.5.4" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.3.6" },
     { name = "pydantic-settings", specifier = "==2.16.0" },
     { name = "structlog", specifier = "==26.1.0" },
 ]
 
-[[package]]
-name = "dmean-worker"
-version = "0.1.0"
-source = { editable = "apps/worker" }
-dependencies = [
-    { name = "dmean-common" },
-    { name = "psycopg", extra = ["binary"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "dmean-common", editable = "packages/common" },
-    { name = "psycopg", extras = ["binary"], specifier = "==3.3.6" },
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyright", specifier = "==1.1.414" },
+    { name = "pytest", specifier = "==9.1.1" },
+    { name = "ruff", specifier = "==0.17.1" },
 ]
 
 [[package]]

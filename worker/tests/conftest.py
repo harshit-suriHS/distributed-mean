@@ -8,17 +8,18 @@ from dataclasses import dataclass, field
 import psycopg
 import pytest
 import redis
-from dmean_common.messages import RESULTS_QUEUE, Report
-from dmean_common.storage import Storage
-from dmean_worker.db import TaskReader
-from dmean_worker.runner import TaskRunner
-from dmean_worker.settings import WorkerSettings
 from dramatiq.brokers.redis import RedisBroker
+
+from dmean_worker.database.task_reader import TaskReader
+from dmean_worker.processing.runner import TaskRunner
+from dmean_worker.queue.messages import RESULTS_QUEUE, Report
+from dmean_worker.settings import Settings
+from dmean_worker.storage.s3 import Storage
 
 TEST_REDIS_DB = 15
 
 
-class IntegrationSettings(WorkerSettings):
+class IntegrationSettings(Settings):
     postgres_user: str  # superuser, only for creating fixtures
     postgres_password: str
 

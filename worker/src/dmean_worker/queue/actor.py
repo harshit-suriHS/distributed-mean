@@ -1,10 +1,10 @@
 """The Dramatiq actor. Kept thin: everything real happens in TaskRunner."""
 
 import dramatiq
-from dmean_common.messages import RUN_TASK_ACTOR, TASKS_QUEUE
 from dramatiq.middleware import CurrentMessage
 
-from .runner import TaskRunner
+from dmean_worker.processing.runner import TaskRunner
+from dmean_worker.queue.messages import RUN_TASK_ACTOR, TASKS_QUEUE
 
 MAX_RETRIES = 2  # 3 attempts in total
 

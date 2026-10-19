@@ -2,15 +2,13 @@
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 
 import psycopg
 import structlog
-from dmean_common.keys import partial_key, result_key
+
+from dmean_worker.processing.task import Task
 
 log = structlog.get_logger()
-
-FINISHED_TASK_STATUSES = frozenset({"done", "failed", "skipped"})
 
 READ_TASK_SQL = """
 SELECT t.id, t.job_id, j.uuid::text AS job_uuid, t.kind, t.no_of_files, t.is_final, t.status,
@@ -23,28 +21,6 @@ SELECT t.id, t.job_id, j.uuid::text AS job_uuid, t.kind, t.no_of_files, t.is_fin
  WHERE t.id = %s
  GROUP BY t.id, j.id
 """
-
-
-@dataclass(frozen=True)
-class Task:
-    id: int
-    job_id: int
-    job_uuid: str
-    kind: str  # map | merge
-    no_of_files: int
-    is_final: bool
-    status: str
-    no_of_columns: int
-    job_status: str
-    input_keys: list[str]
-
-    @property
-    def output_key(self) -> str:
-        return result_key(self.job_uuid) if self.is_final else partial_key(self.job_uuid, self.id)
-
-    @property
-    def should_run(self) -> bool:
-        return self.job_status == "running" and self.status not in FINISHED_TASK_STATUSES
 
 
 class TaskReader:

@@ -3,7 +3,10 @@
 from collections.abc import Callable
 
 import numpy as np
-from dmean_common.csvio import (
+
+from dmean_worker.processing.task import Task
+from dmean_worker.queue.messages import FailureType
+from dmean_worker.storage.csv_format import (
     InvalidInput,
     Vector,
     parse_input,
@@ -11,9 +14,6 @@ from dmean_common.csvio import (
     write_partial,
     write_result,
 )
-from dmean_common.messages import FailureType
-
-from .db import Task
 
 
 class TaskFailed(Exception):
