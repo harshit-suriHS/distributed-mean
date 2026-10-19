@@ -1,6 +1,6 @@
 \restrict dbmate
 
--- Dumped from database version 17.11
+-- Dumped from database version 18.6
 -- Dumped by pg_dump version 18.6
 
 SET statement_timeout = 0;
@@ -83,6 +83,7 @@ CREATE TABLE public.jobs (
     started_at timestamp with time zone,
     completed_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    uuid uuid DEFAULT uuidv7() NOT NULL,
     CONSTRAINT jobs_check CHECK (((status = 'failed'::text) = (failure_type IS NOT NULL))),
     CONSTRAINT jobs_failure_type_check CHECK ((failure_type = ANY (ARRAY['internal'::text, 'user_input'::text]))),
     CONSTRAINT jobs_files_per_task_check CHECK ((files_per_task > 0)),
@@ -178,6 +179,36 @@ ALTER TABLE public.tasks ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
+-- Name: uploads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.uploads (
+    id bigint NOT NULL,
+    uuid uuid DEFAULT uuidv7() NOT NULL,
+    status text DEFAULT 'open'::text NOT NULL,
+    job_id bigint,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT uploads_check CHECK (((status = 'committed'::text) = (job_id IS NOT NULL))),
+    CONSTRAINT uploads_status_check CHECK ((status = ANY (ARRAY['open'::text, 'committed'::text, 'expired'::text])))
+);
+
+
+--
+-- Name: uploads_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.uploads ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.uploads_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: files files_key_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -199,6 +230,14 @@ ALTER TABLE ONLY public.files
 
 ALTER TABLE ONLY public.jobs
     ADD CONSTRAINT jobs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: jobs jobs_uuid_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.jobs
+    ADD CONSTRAINT jobs_uuid_key UNIQUE (uuid);
 
 
 --
@@ -242,6 +281,30 @@ ALTER TABLE ONLY public.tasks
 
 
 --
+-- Name: uploads uploads_job_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.uploads
+    ADD CONSTRAINT uploads_job_id_key UNIQUE (job_id);
+
+
+--
+-- Name: uploads uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.uploads
+    ADD CONSTRAINT uploads_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: uploads uploads_uuid_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.uploads
+    ADD CONSTRAINT uploads_uuid_key UNIQUE (uuid);
+
+
+--
 -- Name: files_job_type; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -267,6 +330,13 @@ CREATE INDEX jobs_active ON public.jobs USING btree (created_at) WHERE (status =
 --
 
 CREATE INDEX tasks_job_status ON public.tasks USING btree (job_id, status);
+
+
+--
+-- Name: uploads_expiring; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX uploads_expiring ON public.uploads USING btree (expires_at) WHERE (status = 'open'::text);
 
 
 --
@@ -331,6 +401,14 @@ ALTER TABLE ONLY public.tasks
 
 
 --
+-- Name: uploads uploads_job_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.uploads
+    ADD CONSTRAINT uploads_job_id_fkey FOREIGN KEY (job_id) REFERENCES public.jobs(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -343,4 +421,5 @@ ALTER TABLE ONLY public.tasks
 
 INSERT INTO public.schema_migrations (version) VALUES
     ('20261018000001'),
-    ('20261018000002');
+    ('20261018000002'),
+    ('20261019000001');
