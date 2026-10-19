@@ -54,7 +54,7 @@ def run_worker(
 def main() -> None:
     settings = Settings()  # pyright: ignore[reportCallIssue]  # values come from env
     configure_logging(settings.log_level, "worker")
-    worker_id = make_worker_id()
+    worker_id = settings.worker_id or make_worker_id()
     structlog.contextvars.bind_contextvars(worker_id=worker_id)
 
     draining = threading.Event()

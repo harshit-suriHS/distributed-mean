@@ -18,6 +18,7 @@ def find_env_file(start: Path | None = None) -> Path | None:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=find_env_file(), extra="ignore")
 
+    worker_id: str | None = None  # default: hostname-pid (on Kubernetes: the pod name)
     orchestrator_addr: str = "localhost:50051"
     lease_wait_secs: int = 20  # long-poll: how long one Lease call waits for work
     report_give_up_secs: float = 300.0  # keep retrying a report this long while unreachable
