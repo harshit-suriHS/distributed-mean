@@ -18,7 +18,9 @@ from dmean_orchestrator.database.cleanup_store import CleanupStore
 from dmean_orchestrator.database.job_store import JobStore
 from dmean_orchestrator.database.task_store import TaskStore
 from dmean_orchestrator.logs import configure_logging
+from dmean_orchestrator.rpc import admin_pb2_grpc
 from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
+from dmean_orchestrator.rpc.admin_service import AdminService
 from dmean_orchestrator.rpc.service import TaskQueueService
 from dmean_orchestrator.settings import Settings
 from dmean_orchestrator.storage.cleanup import Cleaner
@@ -69,6 +71,7 @@ async def serve(settings: Settings, stop: asyncio.Event) -> int:
 
             server = grpc.aio.server()
             pb_grpc.add_TaskQueueServicer_to_server(service, server)
+            admin_pb2_grpc.add_AdminServicer_to_server(AdminService(service), server)
             server.add_insecure_port(f"{settings.grpc_host}:{settings.grpc_port}")
             await server.start()
             lock_lost = asyncio.Event()

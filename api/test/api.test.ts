@@ -6,13 +6,24 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { createPool } from "../src/db/pool.js";
+import { AppError } from "../src/lib/errors.js";
 import { createLogger } from "../src/lib/logger.js";
+import type { OrchestratorClient, WorkersSnapshot } from "../src/orchestrator/client.js";
 import { createStorage } from "../src/storage/s3.js";
 
 const config = loadConfig();
 const pool = createPool(config.db);
 const storage = createStorage(config.s3);
-const app = createApp({ config, pool, storage, logger: createLogger("silent") });
+// The orchestrator's live view is faked here (its gRPC client has its own test)
+let workersSnapshot: WorkersSnapshot | Error = { workers: [], readyTasks: 0 };
+const orchestrator: OrchestratorClient = {
+  listWorkers: async () => {
+    if (workersSnapshot instanceof Error) throw workersSnapshot;
+    return workersSnapshot;
+  },
+  close: () => {},
+};
+const app = createApp({ config, pool, storage, logger: createLogger("silent"), orchestrator });
 
 // Superuser connection: only for assertions, cleanup and forcing expiry
 const admin = new pg.Client({
@@ -350,5 +361,98 @@ describe("GET /jobs/:id/result", () => {
     await s3.send(
       new DeleteObjectsCommand({ Bucket: config.s3.bucket, Delete: { Objects: [{ Key: key }] } }),
     );
+  });
+});
+
+describe("/workers", () => {
+  it("combines W from Postgres with live workers from the orchestrator", async () => {
+    const job = await insertJob("running");
+    workersSnapshot = {
+      readyTasks: 7,
+      workers: [
+        {
+          workerId: "w-busy",
+          busy: true,
+          taskId: "42",
+          jobId: job.id,
+          kind: "map",
+          attempt: 2,
+          secondsOnTask: 3.14,
+          secondsSinceSeen: 1.2,
+        },
+        {
+          workerId: "w-idle",
+          busy: false,
+          taskId: "0",
+          jobId: "0",
+          kind: "",
+          attempt: 0,
+          secondsOnTask: 0,
+          secondsSinceSeen: 0.4,
+        },
+      ],
+    };
+    const res = await request(app).get("/workers").expect(200);
+    expect(res.body).toMatchObject({ live: 2, busy: 1, idle: 1, ready_tasks: 7 });
+    expect(res.body.workers[0]).toEqual({
+      id: "w-busy",
+      status: "busy",
+      task: { id: "42", job_id: job.uuid, kind: "map", attempt: 2, seconds: 3.1 },
+      seconds_since_seen: 1.2,
+    });
+    expect(res.body.workers[1]).toMatchObject({ id: "w-idle", status: "idle", task: null });
+  });
+
+  it("503 while the orchestrator is unreachable", async () => {
+    workersSnapshot = new AppError(503, "orchestrator_unavailable", "orchestrator: down");
+    const res = await request(app).get("/workers").expect(503);
+    expect(res.body.error.code).toBe("orchestrator_unavailable");
+    workersSnapshot = { workers: [], readyTasks: 0 };
+  });
+
+  it("PUT sets the desired number of workers and notifies the supervisor", async () => {
+    const listener = new pg.Client({
+      host: config.db.host,
+      port: config.db.port,
+      database: config.db.database,
+      user: process.env.POSTGRES_USER,
+      password: process.env.POSTGRES_PASSWORD,
+    });
+    await listener.connect();
+    const heard: string[] = [];
+    await listener.query("LISTEN settings_changed");
+    listener.on("notification", (n) => heard.push(n.payload ?? ""));
+    const before = (await request(app).get("/workers").expect(200)).body.desired_workers;
+    try {
+      await request(app)
+        .put("/workers")
+        .send({ desired_workers: 7 })
+        .expect(200, { desired_workers: 7 });
+      expect((await request(app).get("/workers")).body.desired_workers).toBe(7);
+      await expect.poll(() => heard).toContain("7");
+      await request(app).put("/workers").send({ desired_workers: 10_001 }).expect(400);
+      await request(app).put("/workers").send({ desired_workers: 3, extra: 1 }).expect(400);
+    } finally {
+      await request(app).put("/workers").send({ desired_workers: before }).expect(200);
+      await listener.end();
+    }
+  });
+});
+
+describe("GET /stats", () => {
+  it("counts jobs by state and tasks of active jobs", async () => {
+    const before = (await request(app).get("/stats").expect(200)).body;
+    const job = await insertJob("running");
+    await admin.query(
+      `INSERT INTO tasks (job_id, kind, no_of_files, status) VALUES ($1, 'map', 2, 'pending'),
+              ($1, 'map', 2, 'running')`,
+      [job.id],
+    );
+    const after = (await request(app).get("/stats").expect(200)).body;
+    expect(after.jobs.running).toBe(before.jobs.running + 1);
+    expect(after.tasks_of_active_jobs.pending).toBe(before.tasks_of_active_jobs.pending + 1);
+    expect(after.tasks_of_active_jobs.running).toBe(before.tasks_of_active_jobs.running + 1);
+    expect(Object.keys(after).sort()).toEqual(["jobs", "last_minute", "tasks_of_active_jobs"]);
+    await admin.query("DELETE FROM tasks WHERE job_id = $1", [job.id]);
   });
 });

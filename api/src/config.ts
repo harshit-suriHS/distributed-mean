@@ -17,6 +17,8 @@ const Env = z.object({
   S3_SECRET_KEY: z.string(),
   S3_BUCKET: z.string(),
 
+  ORCHESTRATOR_ADDR: z.string().default("localhost:50051"),
+
   UPLOAD_TTL_HOURS: z.coerce.number().positive().default(24),
   MAX_UPLOAD_FILE_BYTES: z.coerce
     .number()
@@ -45,6 +47,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       secretKey: e.S3_SECRET_KEY,
       bucket: e.S3_BUCKET,
     },
+    orchestratorAddr: e.ORCHESTRATOR_ADDR,
     uploads: {
       ttlHours: e.UPLOAD_TTL_HOURS,
       maxFileBytes: e.MAX_UPLOAD_FILE_BYTES,

@@ -1,0 +1,28 @@
+// Orchestrator ↔ API contract (read-only views of in-memory state). The API keeps an identical
+// copy in api/proto/admin.proto. Workers don't use this service.
+syntax = "proto3";
+
+package dmean.v1;
+
+service Admin {
+  // Live workers (seen within the liveness window) and what each one is doing right now.
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+}
+
+message ListWorkersRequest {}
+
+message WorkerInfo {
+  string worker_id = 1;
+  bool busy = 2;
+  int64 task_id = 3;             // 0 when idle
+  int64 job_id = 4;              // internal job id; 0 when idle
+  string kind = 5;               // map | merge; empty when idle
+  uint32 attempt = 6;
+  double seconds_on_task = 7;
+  double seconds_since_seen = 8;
+}
+
+message ListWorkersResponse {
+  repeated WorkerInfo workers = 1;
+  uint32 ready_tasks = 2;        // waiting for a worker right now
+}

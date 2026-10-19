@@ -198,8 +198,12 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         self._dispatch()
 
     def live_workers(self) -> int:
+        return len(self.live_worker_ids())
+
+    def live_worker_ids(self) -> list[str]:
+        """Workers seen (lease, heartbeat or report) within the liveness window."""
         cutoff = self._now() - self._settings.worker_alive_secs
-        return sum(1 for seen in self.workers.values() if seen >= cutoff)
+        return [w for w, seen in self.workers.items() if seen >= cutoff]
 
     async def run_timers(self) -> None:
         """Lease expiry and retry release, woken at the earliest deadline (capped by the tick)."""

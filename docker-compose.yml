@@ -52,19 +52,6 @@ services:
     command: ["--wait", "up"]
     restart: "no"
 
-  redis:
-    image: redis:7.4-alpine
-    # Not used for task delivery (workers lease over gRPC). Kept until the UI's
-    # worker-events decision (design §26); no persistence needed.
-    command: ["redis-server", "--appendonly", "no", "--save", ""]
-    ports:
-      - "${REDIS_PORT}:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   minio:
     # Community build; MinIO no longer publishes official images
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
@@ -108,6 +95,7 @@ services:
       S3_ENDPOINT: http://minio:9000
       # presigned URLs are used from the host machine
       S3_PUBLIC_ENDPOINT: http://localhost:${MINIO_API_PORT}
+      ORCHESTRATOR_ADDR: orchestrator:50051  # live worker view (Admin gRPC)
     ports:
       - "${API_PORT}:${API_PORT}"
     depends_on:

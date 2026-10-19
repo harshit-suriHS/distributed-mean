@@ -236,3 +236,29 @@ async def test_live_workers_are_the_ones_seen_recently(orch: Orchestrator) -> No
     await lease(orch, "a", wait=0)
     await lease(orch, "b", wait=0)
     assert orch.service.live_workers() == 2
+
+
+async def test_list_workers_shows_who_is_busy_with_what(orch: Orchestrator, db: Db) -> None:
+    from dmean_orchestrator.rpc import admin_pb2
+
+    job_id, _ = db.job(no_of_files=1)
+    task_id = db.task(job_id, files=1, final=True)
+    await orch.service.load_job(job_id)
+    task = await lease(orch, "busy-w")
+    assert task is not None
+    await lease(orch, "idle-w", wait=0)
+
+    resp = await orch.admin.ListWorkers(admin_pb2.ListWorkersRequest())
+
+    by_id = {w.worker_id: w for w in resp.workers}
+    assert set(by_id) == {"busy-w", "idle-w"}
+    busy = by_id["busy-w"]
+    assert (busy.busy, busy.task_id, busy.job_id, busy.kind, busy.attempt) == (
+        True,
+        task_id,
+        job_id,
+        "map",
+        1,
+    )
+    assert not by_id["idle-w"].busy and by_id["idle-w"].task_id == 0
+    assert resp.ready_tasks == 0

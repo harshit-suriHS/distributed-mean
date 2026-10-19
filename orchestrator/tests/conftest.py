@@ -18,7 +18,9 @@ from psycopg_pool import AsyncConnectionPool
 from dmean_orchestrator.database.cleanup_store import CleanupStore
 from dmean_orchestrator.database.job_store import JobStore
 from dmean_orchestrator.database.task_store import TaskStore
+from dmean_orchestrator.rpc import admin_pb2_grpc
 from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
+from dmean_orchestrator.rpc.admin_service import AdminService
 from dmean_orchestrator.rpc.service import TaskQueueService
 from dmean_orchestrator.settings import Settings
 from dmean_orchestrator.storage.cleanup import Cleaner
@@ -52,6 +54,7 @@ class Orchestrator:
     service: TaskQueueService
     stub: pb_grpc.TaskQueueStub
     fatal: list[BaseException]
+    admin: admin_pb2_grpc.AdminStub
 
 
 @asynccontextmanager
@@ -70,6 +73,7 @@ async def start_orchestrator(
             await service.rebuild()
         server = grpc.aio.server()
         pb_grpc.add_TaskQueueServicer_to_server(service, server)
+        admin_pb2_grpc.add_AdminServicer_to_server(AdminService(service), server)
         port = server.add_insecure_port("127.0.0.1:0")
         await server.start()
         background = [
@@ -78,7 +82,9 @@ async def start_orchestrator(
         ]
         await asyncio.sleep(0.1)  # let the listener subscribe
         async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
-            yield Orchestrator(service, pb_grpc.TaskQueueStub(channel), fatal)
+            yield Orchestrator(
+                service, pb_grpc.TaskQueueStub(channel), fatal, admin_pb2_grpc.AdminStub(channel)
+            )
         for task in background:
             task.cancel()
         await server.stop(grace=None)

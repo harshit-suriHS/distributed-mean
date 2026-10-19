@@ -5,7 +5,10 @@ import type { Config } from "./config.js";
 import { errorHandler, notFound } from "./lib/errors.js";
 import type { Logger } from "./lib/logger.js";
 import { jobsRouter } from "./modules/jobs/jobs.routes.js";
+import { statsRouter } from "./modules/stats/stats.routes.js";
 import { uploadsRouter } from "./modules/uploads/uploads.routes.js";
+import { workersRouter } from "./modules/workers/workers.routes.js";
+import type { OrchestratorClient } from "./orchestrator/client.js";
 import type { Storage } from "./storage/s3.js";
 
 export interface Deps {
@@ -13,6 +16,7 @@ export interface Deps {
   pool: pg.Pool;
   storage: Storage;
   logger: Logger;
+  orchestrator: OrchestratorClient;
 }
 
 /** Builds the app without listening, so tests can drive it directly. */
@@ -28,6 +32,8 @@ export function createApp(deps: Deps) {
   });
   app.use("/uploads", uploadsRouter(deps));
   app.use("/jobs", jobsRouter(deps));
+  app.use("/workers", workersRouter(deps));
+  app.use("/stats", statsRouter(deps));
 
   app.use(() => {
     throw notFound("route");
