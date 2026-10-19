@@ -4,27 +4,11 @@ import asyncio
 import time
 
 import pytest
-from conftest import Db, Orchestrator
+from conftest import Db, Orchestrator, lease, report_done
 
 from dmean_orchestrator.rpc import task_queue_pb2 as pb
 
 pytestmark = pytest.mark.integration
-
-
-async def lease(orch: Orchestrator, worker: str, wait: int = 1) -> pb.Task | None:
-    resp = await orch.stub.Lease(pb.LeaseRequest(worker_id=worker, wait_seconds=wait))
-    return resp.task if resp.HasField("task") else None
-
-
-async def report_done(orch: Orchestrator, task: pb.Task, worker: str = "w1") -> None:
-    await orch.stub.Report(
-        pb.ReportRequest(
-            worker_id=worker,
-            task_id=task.task_id,
-            attempt=task.attempt,
-            done=pb.Done(output_key=task.output_key, size_bytes=42),
-        )
-    )
 
 
 async def report_failed(

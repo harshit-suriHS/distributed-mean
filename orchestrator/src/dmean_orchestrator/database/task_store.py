@@ -40,6 +40,17 @@ class PendingTask:
 class DoneTask:
     job_id: int
     is_final: bool
+    file_id: int  # the output's files row
+    no_of_files: int
+
+
+@dataclass(frozen=True)
+class JobSnapshot:
+    created_at: datetime
+    no_of_files: int
+    files_per_task: int
+    pending: list[PendingTask]
+    unmerged: list[tuple[int, int]]  # (file_id, no_of_files) of partials no merge has taken yet
 
 
 LEASE_SQL = """
@@ -104,25 +115,31 @@ class TaskStore:
             if row is None:
                 return None
             job_id, is_final, no_of_files = int(row[0]), bool(row[1]), int(row[2])
-            await conn.execute(
-                """INSERT INTO files (job_id, type, key, no_of_files, produced_by, size_bytes)
-                   VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (key) DO NOTHING""",
-                (
-                    job_id,
-                    "result" if is_final else "partial",
-                    output_key,
-                    no_of_files,
-                    task_id,
-                    size_bytes,
-                ),
-            )
+            file_row = await (
+                await conn.execute(
+                    """INSERT INTO files (job_id, type, key, no_of_files, produced_by, size_bytes)
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON CONFLICT (key) DO UPDATE SET size_bytes = EXCLUDED.size_bytes
+                       RETURNING id""",
+                    (
+                        job_id,
+                        "result" if is_final else "partial",
+                        output_key,
+                        no_of_files,
+                        task_id,
+                        size_bytes,
+                    ),
+                )
+            ).fetchone()
+            if file_row is None:
+                raise StoreConflict(f"task {task_id}: output row not written")
             if is_final:
                 await conn.execute(
                     """UPDATE jobs SET status = 'succeeded', completed_at = now()
                         WHERE id = %s AND status = 'running'""",
                     (job_id,),
                 )
-        return DoneTask(job_id, is_final)
+        return DoneTask(job_id, is_final, int(file_row[0]), no_of_files)
 
     async def retry(self, task_id: int, attempt: int, delay_secs: float, error: str) -> None:
         """Back to pending; not leasable for delay_secs (backoff)."""
@@ -157,15 +174,18 @@ class TaskStore:
                 (job_id,),
             )
 
-    async def load_pending(self, job_id: int) -> tuple[datetime, list[PendingTask]]:
-        """A running job's created_at and its pending tasks (for planning and restarts)."""
+    async def load_job(self, job_id: int) -> JobSnapshot:
+        """A running job's pending tasks and unmerged partials (after planning, or on restart)."""
         async with self._pool.connection() as conn:
             job = await (
-                await conn.execute("SELECT created_at FROM jobs WHERE id = %s", (job_id,))
+                await conn.execute(
+                    "SELECT created_at, no_of_files, files_per_task FROM jobs WHERE id = %s",
+                    (job_id,),
+                )
             ).fetchone()
             if job is None:
                 raise StoreConflict(f"job {job_id} not found")
-            rows = await (
+            pending = await (
                 await conn.execute(
                     """SELECT id, kind, attempts,
                               coalesce(extract(epoch FROM not_before - now()), 0)::float8
@@ -173,4 +193,19 @@ class TaskStore:
                     (job_id,),
                 )
             ).fetchall()
-        return job[0], [PendingTask(int(r[0]), str(r[1]), int(r[2]), float(r[3])) for r in rows]
+            unmerged = await (
+                await conn.execute(
+                    """SELECT f.id, f.no_of_files FROM files f
+                        WHERE f.job_id = %s AND f.type = 'partial'
+                          AND NOT EXISTS (SELECT 1 FROM task_files tf WHERE tf.file_id = f.id)
+                        ORDER BY f.id""",
+                    (job_id,),
+                )
+            ).fetchall()
+        return JobSnapshot(
+            created_at=job[0],
+            no_of_files=int(job[1]),
+            files_per_task=int(job[2] or 1),
+            pending=[PendingTask(int(r[0]), str(r[1]), int(r[2]), float(r[3])) for r in pending],
+            unmerged=[(int(r[0]), int(r[1])) for r in unmerged],
+        )

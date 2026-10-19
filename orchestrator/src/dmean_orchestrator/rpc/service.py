@@ -10,10 +10,13 @@ Everything runs on one asyncio loop (grpc.aio), so the queue needs no locks. Rul
 import asyncio
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import grpc
+import psycopg
 import structlog
 
+from dmean_orchestrator.database.job_store import JobStore
 from dmean_orchestrator.database.task_store import LeasedTask, TaskStore
 from dmean_orchestrator.rpc import task_queue_pb2 as pb
 from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
@@ -25,6 +28,8 @@ from dmean_orchestrator.scheduling.fair_queue import (
     Kind,
     QueuedTask,
 )
+from dmean_orchestrator.scheduling.merge_pool import Partial, covers, take_merges
+from dmean_orchestrator.scheduling.planner import files_per_task, merge_fan_in
 from dmean_orchestrator.settings import Settings
 from dmean_orchestrator.storage.keys import partial_key, result_key
 
@@ -33,13 +38,26 @@ log = structlog.get_logger()
 FAILURE_TYPES = {pb.INTERNAL: "internal", pb.USER_INPUT: "user_input"}
 
 
+@dataclass
+class _RunningJob:
+    no_of_files: int  # F: a task covering this many files is the final one
+    fan_in: int  # M = max(2, N)
+    pool: list[Partial]  # partials no merge has taken yet
+
+
 class TaskQueueService(pb_grpc.TaskQueueServicer):
     def __init__(
-        self, settings: Settings, store: TaskStore, on_fatal: Callable[[BaseException], None]
+        self,
+        settings: Settings,
+        store: TaskStore,
+        jobs: JobStore,
+        on_fatal: Callable[[BaseException], None],
     ) -> None:
         self._settings = settings
         self._store = store
+        self._job_store = jobs
         self._on_fatal = on_fatal
+        self._jobs: dict[int, _RunningJob] = {}
         self.queue = FairQueue(
             lease_secs=settings.lease_secs,
             max_lease_secs=settings.max_lease_secs,
@@ -99,12 +117,60 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
 
     # ---- feeding the queue ---------------------------------------------------------------
 
+    async def listen_for_jobs(self, dsn: str) -> None:
+        """Plans jobs as the API announces them (Postgres NOTIFY new_job)."""
+        try:
+            async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
+                await conn.execute("LISTEN new_job")
+                await self.plan_queued()  # jobs announced while we weren't listening
+                async for notify in conn.notifies():
+                    await self.plan(int(notify.payload))
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            self._fatal(err)
+
+    async def plan_queued(self) -> None:
+        for job_id in await self._job_store.queued_job_ids():
+            await self.plan(job_id)
+
+    async def plan(self, job_id: int) -> None:
+        """Splits a queued job into map tasks (no-op if it's already planned)."""
+
+        def size_for(no_of_files: int, no_of_columns: int) -> int:
+            return files_per_task(
+                no_of_files=no_of_files,
+                no_of_columns=no_of_columns,
+                live_workers=self.live_workers(),
+                target_task_secs=self._settings.target_task_secs,
+                min_task_secs=self._settings.min_task_secs,
+                rate=self._settings.default_rate,
+                max_files_per_task=self._settings.max_files_per_task,
+            )
+
+        planned = await self._job_store.plan_job(job_id, size_for)
+        if planned is None:
+            return
+        log.info(
+            "job planned",
+            job_id=job_id,
+            files_per_task=planned.files_per_task,
+            tasks=planned.tasks,
+            live_workers=self.live_workers(),
+        )
+        await self.load_job(job_id)
+
     async def load_job(self, job_id: int) -> None:
-        """Adds a running job's pending tasks to the queue and wakes waiting workers."""
-        created_at, pending = await self._store.load_pending(job_id)
+        """Adds a running job's pending tasks and unmerged partials, then wakes waiting workers."""
+        snap = await self._store.load_job(job_id)
         now = self._now()
-        self.queue.add_job(job_id, created_at.timestamp())
-        for t in pending:
+        self._jobs[job_id] = _RunningJob(
+            no_of_files=snap.no_of_files,
+            fan_in=merge_fan_in(snap.files_per_task),
+            pool=[Partial(file_id, n) for file_id, n in snap.unmerged],
+        )
+        self.queue.add_job(job_id, snap.created_at.timestamp())
+        for t in snap.pending:
             self.queue.add_task(
                 t.task_id,
                 job_id,
@@ -113,6 +179,7 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
                 not_before=now + t.not_before_in,
                 now=now,
             )
+        await self._merge_what_is_ready(job_id)
         self._dispatch()
 
     def live_workers(self) -> int:
@@ -143,11 +210,40 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         if outcome is not CompleteOutcome.ACCEPTED:
             self._fatal(RuntimeError(f"task {task_id}: database accepted done, queue did not"))
             return
-        log.info("task done", task_id=task_id, job_id=recorded.job_id, final=recorded.is_final)
+        job_id = recorded.job_id
+        log.info("task done", task_id=task_id, job_id=job_id, final=recorded.is_final)
         if recorded.is_final:
-            log.info("job succeeded", job_id=recorded.job_id)
-            self.queue.remove_job(recorded.job_id)
-        # merge pool and completion of multi-task jobs: added with the planner (step 2)
+            log.info("job succeeded", job_id=job_id)
+            self.queue.remove_job(job_id)
+            self._jobs.pop(job_id, None)
+            return
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        job.pool.append(Partial(recorded.file_id, recorded.no_of_files))
+        try:
+            await self._merge_what_is_ready(job_id)
+        except Exception as err:
+            self._fatal(err)
+            return
+        self._dispatch()
+
+    async def _merge_what_is_ready(self, job_id: int) -> None:
+        """Creates merge tasks for full groups of partials, or the last group once nothing else
+        of the job is unfinished. The merge covering all F files is the final task."""
+        job = self._jobs[job_id]
+        for group in take_merges(job.pool, job.fan_in, self.queue.unfinished(job_id)):
+            is_final = covers(group) == job.no_of_files
+            task_id = await self._job_store.create_merge(job_id, group, is_final)
+            self.queue.add_task(task_id, job_id, Kind.MERGE, now=self._now())
+            log.info(
+                "merge created",
+                job_id=job_id,
+                task_id=task_id,
+                inputs=len(group),
+                covers=covers(group),
+                final=is_final,
+            )
 
     async def _on_failed(self, task_id: int, attempt: int, failed: pb.Failed) -> None:
         task = self.queue.tasks.get(task_id)
@@ -176,6 +272,7 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
 
     async def _fail_job(self, job_id: int, task_id: int, failure_type: str, error: str) -> None:
         self.queue.drop_job(job_id)
+        self._jobs.pop(job_id, None)
         await self._store.fail_job(job_id, task_id, failure_type, error)
         log.warning("job failed", job_id=job_id, failure_type=failure_type, error=error)
 

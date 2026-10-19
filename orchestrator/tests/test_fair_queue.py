@@ -228,3 +228,14 @@ def test_next_wakeup_is_the_earliest_timer() -> None:
     assert q.next_wakeup() == T0 + 30
     q.fail(t, 1, retryable=True, now=T0 + 1)
     assert q.next_wakeup() == T0 + 3  # retry due before the (now stale) lease entry
+
+
+def test_unfinished_counts_down_to_zero_as_tasks_finish() -> None:
+    q = queue_with({1: 3})
+    assert q.unfinished(1) == 3
+    a, b = take_id(q), take_id(q)
+    q.complete(a, T0)
+    q.fail(b, 1, retryable=True, now=T0)  # retrying still counts as unfinished
+    assert q.unfinished(1) == 2
+    q.add_task(1900, 1, Kind.MERGE, now=T0)
+    assert q.unfinished(1) == 3

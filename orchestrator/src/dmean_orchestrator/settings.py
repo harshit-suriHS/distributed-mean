@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     grpc_host: str = "0.0.0.0"
     grpc_port: int = 50051
 
+    # Sizing (design §7)
+    target_task_secs: float = 25.0
+    min_task_secs: float = 5.0
+    default_rate: float = 5_000_000.0  # values/s one worker parses (measured: ~0.2 s per 1M)
+    max_files_per_task: int = 5000
+
     # Leases (design §9)
     lease_secs: float = 30.0
     heartbeat_secs: int = 10

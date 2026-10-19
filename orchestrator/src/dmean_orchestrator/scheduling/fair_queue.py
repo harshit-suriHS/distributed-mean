@@ -62,6 +62,7 @@ class _Job:
     created_at: float
     ready: deque[int] = field(default_factory=deque[int])
     in_flight: int = 0
+    unfinished: int = 0  # tasks not yet done: 0 means nothing else will produce a partial
     version: int = 0
     active: bool = True
 
@@ -129,6 +130,7 @@ class FairQueue:
         """A pending task (new, or restored on startup). Waits for `not_before` if in the future."""
         task = QueuedTask(task_id, job_id, kind, TaskState.READY, attempt, not_before)
         self.tasks[task_id] = task
+        self._jobs[job_id].unfinished += 1
         if not_before > now:
             task.state = TaskState.DELAYED
             heapq.heappush(self._retry_heap, (not_before, task_id))
@@ -141,6 +143,7 @@ class FairQueue:
         """A task that was running when the orchestrator restarted: give it a fresh grace lease."""
         task = QueuedTask(task_id, job_id, kind, TaskState.LEASED, attempt)
         self.tasks[task_id] = task
+        self._jobs[job_id].unfinished += 1
         self._lease(task, worker_id, now)
 
     # ---- leasing --------------------------------------------------------------------------
@@ -196,6 +199,7 @@ class FairQueue:
             self._job(task).in_flight -= 1
             self._bump(self._job(task))
         # READY or DELAYED (its lease had expired): it's done now, so its queued entries go stale
+        self._job(task).unfinished -= 1
         task.state = TaskState.DONE
         task.lease = None
         return CompleteOutcome.ACCEPTED
@@ -275,6 +279,10 @@ class FairQueue:
 
     def in_flight(self, job_id: int) -> int:
         return self._jobs[job_id].in_flight
+
+    def unfinished(self, job_id: int) -> int:
+        """Tasks of the job not done yet (pending, retrying or leased)."""
+        return self._jobs[job_id].unfinished
 
     def has_ready(self) -> bool:
         return any(self.tasks[t].state is TaskState.READY for t in self._merges) or any(

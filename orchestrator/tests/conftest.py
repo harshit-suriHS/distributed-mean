@@ -11,6 +11,7 @@ import psycopg
 import pytest
 from psycopg_pool import AsyncConnectionPool
 
+from dmean_orchestrator.database.job_store import JobStore
 from dmean_orchestrator.database.task_store import TaskStore
 from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
 from dmean_orchestrator.rpc.service import TaskQueueService
@@ -30,6 +31,7 @@ FAST = {
     "min_backoff_secs": 0.2,
     "max_backoff_secs": 1.0,
     "timer_tick_secs": 0.05,
+    "max_files_per_task": 2,  # small tasks, so planning and merging show up with a few files
 }
 
 
@@ -50,15 +52,20 @@ async def orch(settings: IntegrationSettings) -> AsyncIterator[Orchestrator]:
     fatal: list[BaseException] = []
     async with AsyncConnectionPool(settings.db_dsn, min_size=1, max_size=5, open=False) as pool:
         await pool.wait()
-        service = TaskQueueService(settings, TaskStore(pool), fatal.append)
+        service = TaskQueueService(settings, TaskStore(pool), JobStore(pool), fatal.append)
         server = grpc.aio.server()
         pb_grpc.add_TaskQueueServicer_to_server(service, server)
         port = server.add_insecure_port("127.0.0.1:0")
         await server.start()
-        timers = asyncio.create_task(service.run_timers())
+        background = [
+            asyncio.create_task(service.run_timers()),
+            asyncio.create_task(service.listen_for_jobs(settings.db_dsn)),
+        ]
+        await asyncio.sleep(0.1)  # let the listener subscribe
         async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
             yield Orchestrator(service, pb_grpc.TaskQueueStub(channel), fatal)
-        timers.cancel()
+        for task in background:
+            task.cancel()
         await server.stop(grace=None)
     assert fatal == [], f"orchestrator hit a fatal error: {fatal}"
 
@@ -79,6 +86,46 @@ class Db:
         assert row is not None
         self.job_ids.append(int(row[0]))
         return int(row[0]), str(row[1])
+
+    def queued_job(self, no_of_files: int, *, inputs: int | None = None) -> int:
+        """A committed job as the API leaves it: queued, with its input files, no tasks yet."""
+        row = self.admin.execute(
+            "INSERT INTO jobs (no_of_files, no_of_columns) VALUES (%s, 3) RETURNING id",
+            (no_of_files,),
+        ).fetchone()
+        assert row is not None
+        job_id = int(row[0])
+        self.job_ids.append(job_id)
+        prefix = f"inputs/test-{uuid.uuid4()}/"
+        for i in range(no_of_files if inputs is None else inputs):
+            self.admin.execute(
+                "INSERT INTO files (job_id, type, key, no_of_files) VALUES (%s, 'input', %s, 1)",
+                (job_id, f"{prefix}f{i}.csv"),
+            )
+        return job_id
+
+    def notify_new_job(self, job_id: int) -> None:
+        self.admin.execute("SELECT pg_notify('new_job', %s)", (str(job_id),))
+
+    def tasks(self, job_id: int) -> list[dict[str, Any]]:
+        rows = self.admin.execute(
+            """SELECT t.id, t.kind, t.no_of_files, t.is_final, t.status, count(tf.file_id)
+                 FROM tasks t LEFT JOIN task_files tf ON tf.task_id = t.id
+                WHERE t.job_id = %s GROUP BY t.id ORDER BY t.id""",
+            (job_id,),
+        ).fetchall()
+        keys = ["id", "kind", "no_of_files", "is_final", "status", "inputs"]
+        return [dict(zip(keys, r, strict=True)) for r in rows]
+
+    def files_used_twice(self, job_id: int) -> int:
+        row = self.admin.execute(
+            """SELECT count(*) FROM files f
+                WHERE f.job_id = %s
+                  AND (SELECT count(*) FROM task_files tf WHERE tf.file_id = f.id) > 1""",
+            (job_id,),
+        ).fetchone()
+        assert row is not None
+        return int(row[0])
 
     def task(self, job_id: int, files: int, *, final: bool = False, kind: str = "map") -> int:
         prefix = f"inputs/test-{uuid.uuid4()}/"
@@ -149,3 +196,30 @@ def db(settings: IntegrationSettings) -> Iterator[Db]:
         fixtures = Db(conn)
         yield fixtures
         fixtures.cleanup()
+
+
+async def lease(orch: Orchestrator, worker: str, wait: int = 1) -> Any:
+    from dmean_orchestrator.rpc import task_queue_pb2 as pb
+
+    resp = await orch.stub.Lease(pb.LeaseRequest(worker_id=worker, wait_seconds=wait))
+    return resp.task if resp.HasField("task") else None
+
+
+async def report_done(orch: Orchestrator, task: Any, worker: str = "w1") -> None:
+    from dmean_orchestrator.rpc import task_queue_pb2 as pb
+
+    await orch.stub.Report(
+        pb.ReportRequest(
+            worker_id=worker,
+            task_id=task.task_id,
+            attempt=task.attempt,
+            done=pb.Done(output_key=task.output_key, size_bytes=42),
+        )
+    )
+
+
+async def wait_for(check: Any, timeout: float = 3.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not check():
+        assert asyncio.get_running_loop().time() < deadline, "condition not met in time"
+        await asyncio.sleep(0.05)
