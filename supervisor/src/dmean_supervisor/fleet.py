@@ -3,6 +3,7 @@
 import os
 import signal
 import subprocess
+import threading
 import time
 
 import structlog
@@ -69,12 +70,13 @@ class Fleet:
                 del self._children[worker_id]
         return exited
 
-    def stop_all(self, timeout_secs: float) -> None:
-        """Drain everyone; SIGKILL whoever is still running after the timeout."""
+    def stop_all(self, timeout_secs: float, hurry: threading.Event | None = None) -> None:
+        """Drain everyone; SIGKILL whoever is still running after the timeout, or as soon as
+        `hurry` is set (a second signal)."""
         for worker_id in list(self._procs):
             self.terminate(worker_id)
         deadline = time.monotonic() + timeout_secs
-        while self._procs and time.monotonic() < deadline:
+        while self._procs and time.monotonic() < deadline and not (hurry and hurry.is_set()):
             self.reap()
             time.sleep(0.2)
         for worker_id in list(self._procs):

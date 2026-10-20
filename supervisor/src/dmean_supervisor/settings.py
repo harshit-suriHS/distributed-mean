@@ -32,7 +32,9 @@ class SupervisorSettings(BaseSettings):
     reconcile_secs: float = 5.0  # also woken at once by NOTIFY settings_changed
     startup_grace_secs: float = 30.0  # a new worker isn't judged before this
     hang_after_secs: float = 60.0  # alive but unseen by the orchestrator this long → SIGKILL
-    drain_timeout_secs: float = 300.0  # on shutdown: wait this long for workers to finish
+    # on shutdown: wait this long for workers to finish, then SIGKILL; below compose's
+    # stop_grace_period (5 min) so we kill and reap stragglers before Docker kills us
+    drain_timeout_secs: float = 270.0
 
     log_level: str = "info"
 

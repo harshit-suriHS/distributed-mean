@@ -1,5 +1,6 @@
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -36,3 +37,17 @@ def test_workers_do_not_inherit_database_credentials(
     assert env["S3_SECRET_KEY"] == "s3-secret"
     assert env["ORCHESTRATOR_ADDR"] == "orchestrator:50051"
     assert "PATH" in env
+
+
+def test_hurry_kills_workers_that_ignore_sigterm() -> None:
+    """A second signal doesn't wait out the drain timeout."""
+    stubborn = "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    fleet = Fleet([sys.executable, "-c", stubborn], "t")
+    fleet.spawn()
+    time.sleep(0.5)  # let it install its handler
+    hurry = threading.Event()
+    threading.Timer(0.3, hurry.set).start()
+    started = time.monotonic()
+    fleet.stop_all(timeout_secs=60, hurry=hurry)
+    assert time.monotonic() - started < 5
+    assert fleet.children() == []

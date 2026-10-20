@@ -21,10 +21,13 @@ pytestmark = pytest.mark.integration
 class RunningWorker:
     def __init__(self, settings: Settings, storage: Storage, address: str, slowdown: float = 0.0):
         self.draining = threading.Event()
+        self.stop_now = threading.Event()
         self.client = TaskQueueClient(address, "test-worker")
         runner = TaskRunner(storage, slowdown)
         self.thread = threading.Thread(
-            target=run_worker, args=(settings, self.client, runner, self.draining), daemon=True
+            target=run_worker,
+            args=(settings, self.client, runner, self.draining, self.stop_now),
+            daemon=True,
         )
 
     def __enter__(self) -> "RunningWorker":
@@ -101,6 +104,39 @@ def test_heartbeats_while_running_and_stop_abandons_quietly(
         time.sleep(1.0)
     assert fake.queue.reports == []  # abandoned: nothing to report
     assert storage.size_if_exists(objects.key("out.csv")) is None
+
+
+def test_first_signal_finishes_the_task_second_hands_it_back(
+    fake: FakeOrchestrator, objects: Objects, settings: Settings, storage: Storage
+) -> None:
+    keys = [objects.put(f"g{i}.csv", "1,2,3\n") for i in range(10)]
+    fake.queue.tasks.append(make_task(21, keys, objects.key("a.csv")))
+    fake.queue.tasks.append(make_task(22, keys * 4, objects.key("b.csv")))
+    # 0.2 s per file: each task outlasts its first heartbeat (1 s), which proves the worker holds
+    # it (a task the fake has handed out may still be in flight to the worker)
+
+    worker = RunningWorker(settings, storage, fake.address, slowdown=0.2)
+    worker.__enter__()
+    wait_until(lambda: 21 in fake.queue.heartbeats)
+    worker.draining.set()  # first signal mid-task: it finishes and reports done
+    worker.thread.join(timeout=10)
+    assert not worker.thread.is_alive()
+    worker.client.close()
+    [report] = fake.queue.reports
+    assert (report.task_id, report.WhichOneof("outcome")) == (21, "done")
+    assert fake.queue.leased == 1  # and it leased nothing more
+
+    worker = RunningWorker(settings, storage, fake.address, slowdown=0.2)
+    worker.__enter__()
+    wait_until(lambda: 22 in fake.queue.heartbeats)
+    worker.draining.set()
+    worker.stop_now.set()  # second signal: abandon now, hand the task back
+    worker.thread.join(timeout=5)
+    assert not worker.thread.is_alive()
+    worker.client.close()
+    failed = fake.queue.reports[1].failed
+    assert (fake.queue.reports[1].task_id, failed.retryable) == (22, True)
+    assert storage.size_if_exists(objects.key("b.csv")) is None
 
 
 def test_report_is_held_while_the_orchestrator_is_down(

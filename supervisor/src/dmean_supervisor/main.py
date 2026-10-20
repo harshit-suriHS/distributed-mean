@@ -3,7 +3,9 @@ Supervisor process: keeps `settings.desired_workers` worker processes running.
 
 Every reconcile_secs, and at once on NOTIFY settings_changed (PUT /workers): read W from
 Postgres, ask the orchestrator what it sees (Admin.ListWorkers), then spawn, drain or kill.
-On Kubernetes this job belongs to a Deployment (replicas = W) instead.
+Workers are this process's children, so they stop with it: a graceful stop drains them, a crash
+or SIGKILL loses only their in-flight tasks (leases expire, tasks are retried). On Kubernetes this
+job belongs to a Deployment (replicas = W) instead, and workers outlive any controller.
 """
 
 import signal
@@ -64,7 +66,9 @@ def reconcile_once(
         fleet.spawn()
 
 
-def run(settings: SupervisorSettings, stop: threading.Event) -> None:
+def run(
+    settings: SupervisorSettings, stop: threading.Event, hurry: threading.Event | None = None
+) -> None:
     fleet = Fleet(settings.worker_command, settings.worker_id_prefix)
     orchestrator = Orchestrator(settings.orchestrator_addr)
     try:
@@ -83,15 +87,20 @@ def run(settings: SupervisorSettings, stop: threading.Event) -> None:
                     pass
     finally:
         log.info("supervisor stopping: draining workers")
-        fleet.stop_all(settings.drain_timeout_secs)
+        fleet.stop_all(settings.drain_timeout_secs, hurry)
         orchestrator.close()
         log.info("supervisor stopped")
 
 
 def main() -> None:
+    # First SIGTERM/SIGINT: drain every worker (each finishes its task). A second one: SIGKILL
+    # them now; their leases expire and the orchestrator retries the tasks.
     stop = threading.Event()
+    hurry = threading.Event()
 
     def on_signal(signum: int, frame: object) -> None:
+        if stop.is_set():
+            hurry.set()
         stop.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -99,7 +108,7 @@ def main() -> None:
 
     settings = SupervisorSettings()  # pyright: ignore[reportCallIssue]  # values come from env
     configure_logging(settings.log_level, "supervisor")
-    run(settings, stop)
+    run(settings, stop, hurry)
 
 
 if __name__ == "__main__":

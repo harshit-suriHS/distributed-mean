@@ -41,9 +41,11 @@ class FakeTaskQueue(pb_grpc.TaskQueueServicer):
     reported: threading.Event = field(default_factory=threading.Event)
     fail_reports: bool = False  # simulate a crashing orchestrator: Report → UNAVAILABLE
     report_attempts: int = 0
+    leased: int = 0
 
     def Lease(self, request: pb.LeaseRequest, context: Any) -> pb.LeaseResponse:
         if self.tasks:
+            self.leased += 1
             return pb.LeaseResponse(task=self.tasks.popleft())
         context.add_callback(lambda: None)
         threading.Event().wait(min(request.wait_seconds, 0.2))
