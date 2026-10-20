@@ -6,13 +6,13 @@ from typing import Any
 import boto3
 from botocore.config import Config
 
-from dmean_orchestrator.settings import Settings
+from dmean_orchestrator.settings import CleanupSettings
 
 DELETE_BATCH = 1000  # S3 DeleteObjects limit
 
 
 class ObjectStore:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: CleanupSettings) -> None:
         self.bucket = settings.s3_bucket
         self._s3: Any = boto3.client(
             "s3",

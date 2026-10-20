@@ -12,6 +12,16 @@ from dmean_supervisor.reconcile import Child
 log = structlog.get_logger()
 
 
+def worker_env(worker_id: str) -> dict[str, str]:
+    """The supervisor's env minus database credentials: workers never touch Postgres."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not (k.startswith("POSTGRES_") or k.endswith("_DB_PASSWORD"))
+    }
+    return {**env, "WORKER_ID": worker_id}
+
+
 class Fleet:
     def __init__(self, command: list[str], id_prefix: str) -> None:
         self._command = command
@@ -26,7 +36,7 @@ class Fleet:
     def spawn(self) -> str:
         self._counter += 1
         worker_id = f"{self._prefix}-{self._counter}"
-        proc = subprocess.Popen(self._command, env={**os.environ, "WORKER_ID": worker_id})
+        proc = subprocess.Popen(self._command, env=worker_env(worker_id))
         self._procs[worker_id] = proc
         self._children[worker_id] = Child(worker_id, started_at=time.monotonic())
         log.info("worker spawned", worker=worker_id, pid=proc.pid)

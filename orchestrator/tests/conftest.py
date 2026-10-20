@@ -21,10 +21,10 @@ from dmean_orchestrator.rpc import admin_pb2_grpc
 from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
 from dmean_orchestrator.rpc.admin_service import AdminService
 from dmean_orchestrator.rpc.service import TaskQueueService
-from dmean_orchestrator.settings import Settings
+from dmean_orchestrator.settings import CleanupSettings
 
 
-class IntegrationSettings(Settings):
+class IntegrationSettings(CleanupSettings):
     postgres_user: str  # superuser, only for creating fixtures
     postgres_password: str
 

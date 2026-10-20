@@ -26,12 +26,6 @@ class Settings(BaseSettings):
     orchestrator_db_password: str
     db_pool_size: int = 10
 
-    s3_endpoint: str
-    s3_region: str = "us-east-1"
-    s3_access_key: str
-    s3_secret_key: str
-    s3_bucket: str
-
     advisory_lock_key: int = 4242  # only one orchestrator holds it; a second copy waits
     cleanup_after_hours: float = (
         24.0  # dmean-cleanup deletes a job's inputs/partials this long after it ends
@@ -78,3 +72,13 @@ class Settings(BaseSettings):
             f"host={self.postgres_host} port={self.postgres_port} dbname={self.postgres_db} "
             f"user=orchestrator password={self.orchestrator_db_password}"
         )
+
+
+class CleanupSettings(Settings):
+    """dmean-cleanup also talks to storage; the orchestrator itself never does."""
+
+    s3_endpoint: str
+    s3_region: str = "us-east-1"
+    s3_access_key: str
+    s3_secret_key: str
+    s3_bucket: str
