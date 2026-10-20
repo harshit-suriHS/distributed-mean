@@ -2,6 +2,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db/pool.js";
 import { createLogger } from "./lib/logger.js";
+import { startValidationSweep } from "./modules/jobs/jobs.validation.js";
 import { createOrchestratorClient } from "./orchestrator/client.js";
 import { createStorage } from "./storage/s3.js";
 
@@ -11,15 +12,15 @@ const pool = createPool(config.db);
 const storage = createStorage(config.s3);
 const orchestrator = createOrchestratorClient(config.orchestratorAddr);
 
-const server = createApp({ config, pool, storage, logger, orchestrator }).listen(
-  config.port,
-  () => {
-    logger.info({ port: config.port }, "api listening");
-  },
-);
+const deps = { config, pool, storage, logger, orchestrator };
+const stopSweep = startValidationSweep(deps);
+const server = createApp(deps).listen(config.port, () => {
+  logger.info({ port: config.port }, "api listening");
+});
 
 function shutdown(signal: string) {
   logger.info({ signal }, "shutting down");
+  stopSweep();
   server.close(() => {
     orchestrator.close();
     pool.end().finally(() => process.exit(0));

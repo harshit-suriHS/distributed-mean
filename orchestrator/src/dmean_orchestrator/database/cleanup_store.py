@@ -73,3 +73,20 @@ class CleanupStore:
                 )
             ).fetchall()
         return [str(r[0]) for r in rows]
+
+    async def rejected_upload_uuids(self, after_hours: float) -> list[str]:
+        """Uploads whose job failed validation more than after_hours ago. Such a job never got
+        input `files` rows, so its objects are found by listing the upload's prefix. Recent ones
+        only (a 2-day window), like expired uploads."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    """SELECT u.uuid::text FROM uploads u JOIN jobs j ON j.id = u.job_id
+                        WHERE j.status = 'failed'
+                          AND j.completed_at <= now() - make_interval(secs => %s)
+                          AND j.completed_at > now() - make_interval(secs => %s)
+                          AND NOT EXISTS (SELECT 1 FROM files f WHERE f.job_id = j.id)""",
+                    (after_hours * 3600, after_hours * 3600 + 2 * 86400),
+                )
+            ).fetchall()
+        return [str(r[0]) for r in rows]

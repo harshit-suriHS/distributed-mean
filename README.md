@@ -13,7 +13,7 @@ The full design, with trade-offs and a decision log, is in [`design.md`](design.
 
 ```
 user ──upload CSVs (presigned policy)──► MinIO (S3)
-     ──POST /jobs──► API ──insert job + NOTIFY──► Postgres ◄──── every state change ────┐
+     ──POST /jobs──► API ──validate, queue + NOTIFY──► Postgres ◄── every state change ─┐
                                                      │                                 │
                                           LISTEN new_job                               │
                                                      ▼                                 │
@@ -25,8 +25,10 @@ user ──upload CSVs (presigned policy)──► MinIO (S3)
 
 1. **Upload, then commit.**
    - `POST /uploads` returns one presigned POST policy for a whole prefix, and the client uploads its CSVs in parallel.
-   - `POST /jobs` checks the files are all there and creates the job.
-2. **Plan.** The orchestrator splits the job into map tasks of N files each. N is sized from F, C and the number of live workers, so tasks take about 25 s.
+   - `POST /jobs` creates the job as `validating` and returns `202` at once.
+   - In the background the API lists the prefix and checks every file: the count matches F, each is a `.csv`, and each size can hold C values. Only then is the job `queued` for the orchestrator; otherwise it fails as `user_input` before any work runs.
+   - No lock is held while listing: a short lease (`validating_until`) marks who is validating, and another API replica takes over if it lapses.
+2. **Plan.** The orchestrator splits the job into map tasks of N files each. N is sized from F and C (not W), so tasks take about 25 s.
 3. **Pull with leases.**
    - A free worker long-polls `Lease`, and the orchestrator picks a task at that moment.
    - It picks merges first; otherwise it takes the job with the fewest tasks in flight (max-min fairness, the same rule as the Hadoop Fair Scheduler and SQS fair queues).
@@ -69,7 +71,7 @@ Service URLs and ports:
 | Method | Path | |
 |---|---|---|
 | `POST` | `/uploads` | open an upload, returns a presigned POST policy for `inputs/{upload_id}/` |
-| `POST` | `/jobs` | `{upload_id, no_of_files, no_of_columns}` → `202 {id, status}` |
+| `POST` | `/jobs` | `{upload_id, no_of_files, no_of_columns}` → `202 {id, status: "validating"}` |
 | `GET` | `/jobs/:id` | status, progress, task counts, failure reason |
 | `GET` | `/jobs` | list jobs (`?status=`) |
 | `GET` | `/jobs/:id/result` | presigned download URL for the result CSV |

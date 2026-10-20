@@ -1,12 +1,12 @@
 import { type Db, onlyRow } from "../../db/pool.js";
 import type { StoredObject } from "../../storage/s3.js";
 
-export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+export type JobStatus = "validating" | "queued" | "running" | "succeeded" | "failed";
 export type FailureType = "internal" | "user_input";
 
 export async function insertJob(db: Db, noOfFiles: number, noOfColumns: number) {
   const { rows } = await db.query<{ id: string; uuid: string; status: JobStatus }>(
-    `INSERT INTO jobs (no_of_files, no_of_columns) VALUES ($1, $2)
+    `INSERT INTO jobs (no_of_files, no_of_columns, status) VALUES ($1, $2, 'validating')
      RETURNING id, uuid, status`,
     [noOfFiles, noOfColumns],
   );
@@ -20,6 +20,59 @@ export async function insertInputFiles(db: Db, jobId: string, objects: StoredObj
      SELECT $1, 'input', key, 1, size
        FROM unnest($2::text[], $3::bigint[]) AS t(key, size)`,
     [jobId, objects.map((o) => o.key), objects.map((o) => o.size)],
+  );
+}
+
+export interface JobToValidate {
+  id: string;
+  no_of_files: number;
+  no_of_columns: number;
+  upload_uuid: string;
+}
+
+/**
+ * Takes the validation lease on a job (a quick UPDATE that commits at once, not a held lock).
+ * Undefined if the job isn't validating or another API replica holds an unexpired lease.
+ */
+export async function claimValidation(db: Db, jobId: string, leaseSecs: number) {
+  const { rows } = await db.query<JobToValidate>(
+    `UPDATE jobs j SET validating_until = now() + make_interval(secs => $2)
+       FROM uploads u
+      WHERE j.id = $1 AND u.job_id = j.id AND j.status = 'validating'
+        AND (j.validating_until IS NULL OR j.validating_until < now())
+     RETURNING j.id, j.no_of_files, j.no_of_columns, u.uuid AS upload_uuid`,
+    [jobId, leaseSecs],
+  );
+  return rows[0];
+}
+
+/** Validating jobs nobody holds a lease on: new, or left behind by an API that stopped. */
+export async function unclaimedValidations(db: Db) {
+  const { rows } = await db.query<{ id: string }>(
+    `SELECT id FROM jobs
+      WHERE status = 'validating' AND (validating_until IS NULL OR validating_until < now())
+      ORDER BY id`,
+  );
+  return rows.map((r) => r.id);
+}
+
+/** validating -> queued. False if it's no longer validating (another replica got there first). */
+export async function markQueued(db: Db, jobId: string) {
+  const { rowCount } = await db.query(
+    `UPDATE jobs SET status = 'queued', validating_until = NULL
+      WHERE id = $1 AND status = 'validating'`,
+    [jobId],
+  );
+  return rowCount === 1;
+}
+
+/** validating -> failed: the uploaded files don't match what the client said. */
+export async function failValidation(db: Db, jobId: string, error: string) {
+  await db.query(
+    `UPDATE jobs SET status = 'failed', failure_type = 'user_input', error = $2,
+                     completed_at = now(), validating_until = NULL
+      WHERE id = $1 AND status = 'validating'`,
+    [jobId, error],
   );
 }
 

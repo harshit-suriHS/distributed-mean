@@ -134,7 +134,8 @@ class Db:
     def queued_job(self, no_of_files: int, *, inputs: int | None = None) -> int:
         """A committed job as the API leaves it: queued, with its input files, no tasks yet."""
         row = self.admin.execute(
-            "INSERT INTO jobs (no_of_files, no_of_columns) VALUES (%s, 3) RETURNING id",
+            """INSERT INTO jobs (no_of_files, no_of_columns, status)
+               VALUES (%s, 3, 'queued') RETURNING id""",
             (no_of_files,),
         ).fetchone()
         assert row is not None

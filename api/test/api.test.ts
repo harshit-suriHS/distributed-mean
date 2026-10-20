@@ -8,6 +8,7 @@ import { loadConfig } from "../src/config.js";
 import { createPool } from "../src/db/pool.js";
 import { AppError } from "../src/lib/errors.js";
 import { createLogger } from "../src/lib/logger.js";
+import { problemWith, validateJob } from "../src/modules/jobs/jobs.validation.js";
 import type { OrchestratorClient, WorkersSnapshot } from "../src/orchestrator/client.js";
 import { createStorage } from "../src/storage/s3.js";
 
@@ -23,7 +24,8 @@ const orchestrator: OrchestratorClient = {
   },
   close: () => {},
 };
-const app = createApp({ config, pool, storage, logger: createLogger("silent"), orchestrator });
+const deps = { config, pool, storage, logger: createLogger("silent"), orchestrator };
+const app = createApp(deps);
 
 // Superuser connection: only for assertions, cleanup and forcing expiry
 const admin = new pg.Client({
@@ -73,6 +75,22 @@ async function uploadCsvFiles(upload: UploadResponse, count: number) {
   }
 }
 
+/** The job once background validation is over (queued, or failed). */
+async function afterValidation(jobId: string) {
+  let body: { status: string; failure_type: string | null; error: string | null } = {
+    status: "validating",
+    failure_type: null,
+    error: null,
+  };
+  await expect
+    .poll(async () => {
+      body = (await request(app).get(`/jobs/${jobId}`).expect(200)).body;
+      return body.status;
+    })
+    .not.toBe("validating");
+  return body;
+}
+
 beforeAll(async () => {
   await admin.connect();
   await admin.query("LISTEN new_job");
@@ -116,8 +134,9 @@ describe("upload → commit → status", () => {
       .post("/jobs")
       .send({ upload_id: upload.upload_id, no_of_files: 3, no_of_columns: 3 })
       .expect(202);
-    expect(created.body.status).toBe("queued");
+    expect(created.body.status).toBe("validating");
     expect(created.headers.location).toBe(`/jobs/${created.body.id}`);
+    expect((await afterValidation(created.body.id)).status).toBe("queued");
 
     const job = await request(app).get(`/jobs/${created.body.id}`).expect(200);
     expect(job.body).toMatchObject({
@@ -153,21 +172,42 @@ describe("upload policy", () => {
 });
 
 describe("POST /jobs errors", () => {
-  it("400 when the file count does not match, and the upload stays open", async () => {
+  it("returns at once; a wrong file count fails the job in validation", async () => {
     const upload = await openUpload();
     await uploadCsvFiles(upload, 2);
-    const res = await request(app)
+    const created = await request(app)
       .post("/jobs")
       .send({ upload_id: upload.upload_id, no_of_files: 3, no_of_columns: 3 })
-      .expect(400);
-    expect(res.body.error).toEqual({
-      code: "file_count_mismatch",
-      message: "expected 3 files, found 2",
+      .expect(202);
+    expect(await afterValidation(created.body.id)).toMatchObject({
+      status: "failed",
+      failure_type: "user_input",
+      error: "expected 3 files, found 2",
     });
-    const { rows } = await admin.query("SELECT status FROM uploads WHERE uuid = $1", [
-      upload.upload_id,
-    ]);
-    expect(rows[0].status).toBe("open");
+    // Nothing reached the orchestrator: no input rows, no NOTIFY
+    const { rows } = await admin.query(
+      "SELECT count(f.id)::int AS n, j.id::text AS job_id FROM jobs j " +
+        "LEFT JOIN files f ON f.job_id = j.id WHERE j.uuid = $1 GROUP BY j.id",
+      [created.body.id],
+    );
+    expect(rows[0].n).toBe(0);
+    expect(notifications).not.toContain(rows[0].job_id);
+  });
+
+  it("fails validation for a file too small for C values, or not a .csv", async () => {
+    const upload = await openUpload();
+    await uploadCsvFiles(upload, 1);
+    expect((await uploadFile(upload, `${upload.prefix}short.csv`, "1,2\n")).status).toBe(204);
+    expect((await uploadFile(upload, `${upload.prefix}notes.txt`, "1,2,3\n")).status).toBe(204);
+    const created = await request(app)
+      .post("/jobs")
+      .send({ upload_id: upload.upload_id, no_of_files: 3, no_of_columns: 3 })
+      .expect(202);
+    expect(await afterValidation(created.body.id)).toMatchObject({
+      status: "failed",
+      failure_type: "user_input",
+      error: "notes.txt is not a .csv file; short.csv (4 bytes) can't hold 3 values",
+    });
   });
 
   it("409 when the same upload is committed twice", async () => {
@@ -219,6 +259,68 @@ describe("POST /jobs errors", () => {
       .set("content-type", "application/json")
       .send("{not json")
       .expect(400);
+  });
+});
+
+describe("validation lease", () => {
+  /** A committed upload with its job left validating, as a stopped API would leave it. */
+  async function strandedJob(leaseOffsetSecs: number) {
+    const upload = await openUpload();
+    await uploadCsvFiles(upload, 2);
+    const { rows } = await admin.query<{ id: string; uuid: string }>(
+      `INSERT INTO jobs (no_of_files, no_of_columns, validating_until)
+       VALUES (2, 3, now() + make_interval(secs => $1)) RETURNING id, uuid`,
+      [leaseOffsetSecs],
+    );
+    const job = rows[0];
+    if (!job) throw new Error("insert failed");
+    await admin.query("UPDATE uploads SET status = 'committed', job_id = $2 WHERE uuid = $1", [
+      upload.upload_id,
+      job.id,
+    ]);
+    return job;
+  }
+
+  const statusOf = async (uuid: string) =>
+    (await request(app).get(`/jobs/${uuid}`).expect(200)).body.status;
+
+  it("leaves a job alone while another replica's lease is live", async () => {
+    const job = await strandedJob(3600);
+    await validateJob(deps, job.id);
+    expect(await statusOf(job.uuid)).toBe("validating");
+  });
+
+  it("takes over once the lease has lapsed, and queues the job once", async () => {
+    const job = await strandedJob(-1);
+    await Promise.all([validateJob(deps, job.id), validateJob(deps, job.id)]);
+    expect(await statusOf(job.uuid)).toBe("queued");
+    const { rows } = await admin.query("SELECT count(*)::int AS n FROM files WHERE job_id = $1", [
+      job.id,
+    ]);
+    expect(rows[0].n).toBe(2);
+  });
+});
+
+describe("problemWith", () => {
+  const job = { id: "1", no_of_files: 5, no_of_columns: 3, upload_uuid: "u" };
+  const file = (name: string, size = 12) => ({ key: `p/${name}`, size });
+
+  it("accepts files whose sizes can hold C values", () => {
+    const files = ["a", "b", "c", "d", "e"].map((n) => file(`${n}.CSV`));
+    expect(problemWith(job, "p/", files)).toBeNull();
+  });
+
+  it("names the first few problems and counts the rest", () => {
+    const files = ["a", "b", "c", "d", "e"].map((n) => file(`${n}.csv`, 1));
+    expect(problemWith(job, "p/", files)).toBe(
+      "a.csv (1 bytes) can't hold 3 values; b.csv (1 bytes) can't hold 3 values; " +
+        "c.csv (1 bytes) can't hold 3 values and 2 more",
+    );
+  });
+
+  it("rejects files in sub-folders", () => {
+    const files = [file("x/a.csv"), ...["b", "c", "d", "e"].map((n) => file(`${n}.csv`))];
+    expect(problemWith(job, "p/", files)).toBe("x/a.csv is in a sub-folder");
   });
 });
 

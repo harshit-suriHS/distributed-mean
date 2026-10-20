@@ -114,7 +114,9 @@ def insert_jobs(conn: psycopg.Connection[Any], jobs: int, files: int, run: str) 
     job_ids: list[int] = []
     for j in range(jobs):
         row = conn.execute(
-            "INSERT INTO jobs (no_of_files, no_of_columns) VALUES (%s, 1000) RETURNING id", (files,)
+            """INSERT INTO jobs (no_of_files, no_of_columns, status)
+               VALUES (%s, 1000, 'queued') RETURNING id""",
+            (files,),
         ).fetchone()
         assert row is not None
         job_id = int(row[0])

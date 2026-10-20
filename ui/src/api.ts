@@ -1,6 +1,6 @@
 // Thin client for the public API (served under /api by the Vite proxy or nginx).
 
-export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+export type JobStatus = "validating" | "queued" | "running" | "succeeded" | "failed";
 
 export interface JobSummary {
   id: string;

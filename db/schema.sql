@@ -75,7 +75,7 @@ CREATE TABLE public.jobs (
     id bigint NOT NULL,
     no_of_files integer NOT NULL,
     no_of_columns integer NOT NULL,
-    status text DEFAULT 'queued'::text NOT NULL,
+    status text DEFAULT 'validating'::text NOT NULL,
     files_per_task integer,
     failure_type text,
     error text,
@@ -84,12 +84,13 @@ CREATE TABLE public.jobs (
     completed_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     uuid uuid DEFAULT uuidv7() NOT NULL,
+    validating_until timestamp with time zone,
     CONSTRAINT jobs_check CHECK (((status = 'failed'::text) = (failure_type IS NOT NULL))),
     CONSTRAINT jobs_failure_type_check CHECK ((failure_type = ANY (ARRAY['internal'::text, 'user_input'::text]))),
     CONSTRAINT jobs_files_per_task_check CHECK ((files_per_task > 0)),
     CONSTRAINT jobs_no_of_columns_check CHECK ((no_of_columns > 0)),
     CONSTRAINT jobs_no_of_files_check CHECK ((no_of_files > 0)),
-    CONSTRAINT jobs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))
+    CONSTRAINT jobs_status_check CHECK ((status = ANY (ARRAY['validating'::text, 'queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))
 );
 
 
@@ -326,6 +327,13 @@ CREATE INDEX jobs_active ON public.jobs USING btree (created_at) WHERE (status =
 
 
 --
+-- Name: jobs_validating; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX jobs_validating ON public.jobs USING btree (id) WHERE (status = 'validating'::text);
+
+
+--
 -- Name: tasks_job_status; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -425,4 +433,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261019000001'),
     ('20261019000002'),
     ('20261020000001'),
-    ('20261020000002');
+    ('20261020000002'),
+    ('20261021000001');

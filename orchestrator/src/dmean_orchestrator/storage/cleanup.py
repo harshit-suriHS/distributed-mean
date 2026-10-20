@@ -1,5 +1,6 @@
 """
-Deletes what finished jobs and expired uploads leave behind. Results are kept forever.
+Deletes what finished jobs, expired uploads and jobs that failed validation leave behind.
+Results are kept forever.
 
 Runs as a scheduled job (`dmean-cleanup`, hourly), not inside the orchestrator: deleting tens
 of thousands of objects competes with running jobs for the object store, so a job's inputs and
@@ -38,7 +39,12 @@ class Cleaner:
             await self.clean_job(job_id, after_hours)
         await self._store.expire_uploads()
         for upload_uuid in await self._store.expired_upload_uuids():
-            keys = await self._objects.list_prefix(f"inputs/{upload_uuid}/")
-            if keys:
-                await self._objects.delete(keys)
-                log.info("expired upload deleted", upload=upload_uuid, objects=len(keys))
+            await self._delete_upload(upload_uuid, "expired upload deleted")
+        for upload_uuid in await self._store.rejected_upload_uuids(after_hours):
+            await self._delete_upload(upload_uuid, "upload of a job that failed validation deleted")
+
+    async def _delete_upload(self, upload_uuid: str, message: str) -> None:
+        keys = await self._objects.list_prefix(f"inputs/{upload_uuid}/")
+        if keys:
+            await self._objects.delete(keys)
+            log.info(message, upload=upload_uuid, objects=len(keys))

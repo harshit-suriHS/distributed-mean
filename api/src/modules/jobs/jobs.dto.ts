@@ -14,7 +14,7 @@ export type CreateJobRequest = z.infer<typeof CreateJobRequest>;
 export const JobIdParams = z.strictObject({ id: z.uuid() });
 
 export const ListJobsQuery = z.strictObject({
-  status: z.enum(["queued", "running", "succeeded", "failed"]).optional(),
+  status: z.enum(["validating", "queued", "running", "succeeded", "failed"]).optional(),
   before: z.uuid().optional(), // the `next` cursor of the previous page
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -22,7 +22,7 @@ export type ListJobsQuery = z.infer<typeof ListJobsQuery>;
 
 // ---- Responses ----
 
-const JobStatus = z.enum(["queued", "running", "succeeded", "failed"]);
+const JobStatus = z.enum(["validating", "queued", "running", "succeeded", "failed"]);
 const Timestamp = z.iso.datetime();
 
 export const CreateJobResponse = z.object({

@@ -192,3 +192,26 @@ async def test_cleanup_expires_abandoned_uploads_but_not_fresh_ones(
     assert object_exists(objects, settings.s3_bucket, f"inputs/{fresh}/a.csv")
     for name in ("a.csv", "b.csv"):
         objects.delete_object(Bucket=settings.s3_bucket, Key=f"inputs/{fresh}/{name}")
+
+
+async def test_cleanup_deletes_the_upload_of_a_job_that_failed_validation(
+    db: Db, objects: Any, settings: IntegrationSettings
+) -> None:
+    job_id, _ = db.job(no_of_files=3)
+    db.admin.execute(
+        """UPDATE jobs SET status = 'failed', failure_type = 'user_input',
+                          error = 'expected 3 files, found 2', completed_at = now()
+            WHERE id = %s""",
+        (job_id,),
+    )
+    upload = db.upload(expired=False, committed_job=job_id)
+    keys = [f"inputs/{upload}/{name}" for name in ("a.csv", "b.csv")]
+    for key in keys:
+        objects.put_object(Bucket=settings.s3_bucket, Key=key, Body=b"1,2,3\n")
+
+    await run_once(settings)  # just failed: kept for 24h like any job's inputs
+    assert all(object_exists(objects, settings.s3_bucket, k) for k in keys)
+
+    age_job(db, job_id, hours=25)
+    await run_once(settings)
+    assert not any(object_exists(objects, settings.s3_bucket, k) for k in keys)

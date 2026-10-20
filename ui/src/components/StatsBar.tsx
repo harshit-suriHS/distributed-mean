@@ -17,7 +17,10 @@ export function StatsBar({ stats, workers }: { stats: Stats | null; workers: Wor
         label="workers busy / live"
         value={workers ? `${workers.busy} / ${workers.live}` : dash}
       />
-      <Stat label="jobs queued" value={stats?.jobs.queued ?? dash} />
+      <Stat
+        label="jobs validating / queued"
+        value={stats ? `${stats.jobs.validating} / ${stats.jobs.queued}` : dash}
+      />
       <Stat label="jobs running" value={stats?.jobs.running ?? dash} tone="blue" />
       <Stat label="jobs succeeded" value={stats?.jobs.succeeded ?? dash} tone="green" />
       <Stat label="jobs failed" value={stats?.jobs.failed ?? dash} tone="red" />

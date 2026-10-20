@@ -3,6 +3,7 @@ import type { StatsRow } from "./stats.repo.js";
 
 export const StatsResponse = z.object({
   jobs: z.object({
+    validating: z.int(),
     queued: z.int(),
     running: z.int(),
     succeeded: z.int(),
@@ -18,7 +19,7 @@ export const StatsResponse = z.object({
   last_minute: z.object({ tasks_done: z.int(), files_summed: z.int() }),
 });
 
-const JOB_STATES = ["queued", "running", "succeeded", "failed"] as const;
+const JOB_STATES = ["validating", "queued", "running", "succeeded", "failed"] as const;
 const TASK_STATES = ["pending", "running", "done", "failed", "skipped"] as const;
 
 function counts<K extends string>(row: Record<string, number> | null, keys: readonly K[]) {
