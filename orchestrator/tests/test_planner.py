@@ -6,47 +6,51 @@ from dmean_orchestrator.scheduling.merge_pool import Partial, covers, take_merge
 from dmean_orchestrator.scheduling.planner import Sizing, chunk, files_per_task, merge_fan_in
 
 SIZING = Sizing(
-    target_task_secs=25.0,
-    min_task_secs=5.0,
-    per_file_secs=0.008,
-    rate=5_000_000.0,
-    min_tasks_per_job=8,
+    target_task_secs=10.0,
+    request_secs=0.008,
+    bytes_per_value=19.3,
+    bandwidth_bytes_per_sec=150e6,
+    parse_values_per_sec=5_000_000.0,
     max_files_per_task=5000,
 )
 
 
 @pytest.mark.parametrize(
-    ("f", "c", "expected", "why"),
+    ("c", "expected", "why"),
     [
-        (100_000, 1_000_000, 120, "time: 25 s / (8 ms + 0.2 s) per file = 120 files"),
-        (2_000, 1_000_000, 120, "time again: still ~25 s tasks"),
-        (40, 1_000_000, 24, "floor: 5 s / 0.208 s = 24 files, so 2 tasks rather than 8 tiny ones"),
-        (2, 999_999, 24, "N >= F: the whole job is one final map task"),
-        (20_000, 2_000, 2_500, "split: at least 8 tasks per job (time would allow 2,976)"),
-        (2_000, 100, 623, "floor: 5 s / 8.02 ms = 623 files"),
-        (100_000, 10, 3_124, "time: tiny files are dominated by the per-file cost"),
+        (1_000_000, 29, "10 s / (8 ms + 129 ms download + 200 ms parse) per file"),
+        (100_000, 244, "10 s / (8 ms + 12.9 ms download + 20 ms parse) per file"),
+        (2_000, 1_155, "small files: the 8 ms request latency dominates"),
+        (10, 1_249, "tiny files: almost pure request latency"),
     ],
 )
-def test_files_per_task_is_sized_by_time(f: int, c: int, expected: int, why: str) -> None:
-    assert files_per_task(f, c, SIZING) == expected, why
+def test_files_per_task_is_about_ten_seconds_of_work(c: int, expected: int, why: str) -> None:
+    assert files_per_task(c, SIZING) == expected, why
 
 
-def test_files_per_task_does_not_depend_on_the_number_of_workers() -> None:
+def test_n_depends_only_on_c_never_on_f_or_the_number_of_workers() -> None:
     import inspect
 
-    assert "worker" not in " ".join(inspect.signature(files_per_task).parameters)
+    assert list(inspect.signature(files_per_task).parameters) == ["no_of_columns", "s"]
 
 
-def test_per_file_cost_is_what_makes_small_files_cheap_to_batch() -> None:
-    # per-file cost dominates small files: 2,000 values parse in 0.4 ms, the GET takes 8 ms
-    assert SIZING.secs_per_file(2_000) == 0.008 + 2_000 / 5_000_000
+def test_cost_per_file_is_latency_plus_download_plus_parse() -> None:
+    c = 1_000_000
+    assert SIZING.secs_per_file(c) == pytest.approx(0.008 + c * 19.3 / 150e6 + c / 5e6)
 
 
-def test_merge_fan_in_is_a_target_time_of_partials() -> None:
-    assert merge_fan_in(1_000_000, SIZING) == 120
-    assert merge_fan_in(2_000, SIZING) == 2_976
-    tiny_budget = Sizing(0.1, 0.01, 0.008, 5e6, 8, 5000)
-    assert merge_fan_in(1_000_000, tiny_budget) == 2  # never below 2
+def test_n_is_at_least_one_and_capped() -> None:
+    slow = Sizing(0.1, 0.008, 19.3, 150e6, 5e6, 5000)
+    assert files_per_task(1_000_000, slow) == 1  # one file takes longer than T
+    fast = Sizing(1000.0, 0.008, 19.3, 150e6, 5e6, 5000)
+    assert files_per_task(10, fast) == 5000  # the safety cap
+
+
+def test_merge_fan_in_equals_n_and_is_at_least_two() -> None:
+    assert merge_fan_in(1_000_000, SIZING) == files_per_task(1_000_000, SIZING) == 29
+    assert merge_fan_in(2_000, SIZING) == 1_155
+    tiny_budget = Sizing(0.1, 0.008, 19.3, 150e6, 5e6, 5000)
+    assert merge_fan_in(1_000_000, tiny_budget) == 2  # a merge needs two inputs
 
 
 def test_chunk_keeps_order_and_last_chunk_is_smaller() -> None:

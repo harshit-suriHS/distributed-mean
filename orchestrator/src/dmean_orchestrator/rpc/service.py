@@ -144,10 +144,9 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
     async def plan(self, job_id: int) -> None:
         """Splits a queued job into map tasks (no-op if it's already planned)."""
 
-        def size_for(no_of_files: int, no_of_columns: int) -> int:
-            return files_per_task(no_of_files, no_of_columns, self._settings.sizing)
-
-        planned = await self._job_store.plan_job(job_id, size_for)
+        planned = await self._job_store.plan_job(
+            job_id, lambda no_of_columns: files_per_task(no_of_columns, self._settings.sizing)
+        )
         if planned is None:
             return
         log.info(

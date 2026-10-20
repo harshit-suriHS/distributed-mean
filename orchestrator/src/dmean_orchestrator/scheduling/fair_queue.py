@@ -94,7 +94,7 @@ class FairQueue:
         self,
         *,
         lease_secs: float = 30.0,
-        max_lease_secs: float = 250.0,
+        max_lease_secs: float = 100.0,
         max_attempts: int = 4,
         min_backoff_secs: float = 2.0,
         max_backoff_secs: float = 30.0,

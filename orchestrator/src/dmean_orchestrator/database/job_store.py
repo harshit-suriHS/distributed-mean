@@ -39,11 +39,11 @@ class JobStore:
             ).fetchall()
         return [int(r[0]) for r in rows]
 
-    async def plan_job(self, job_id: int, size_for: Callable[[int, int], int]) -> PlanResult | None:
+    async def plan_job(self, job_id: int, size_for: Callable[[int], int]) -> PlanResult | None:
         """
         Splits a queued job's input files into map tasks of N files and sets it running, in one
         transaction. None if the job isn't queued (already planned, e.g. a repeated NOTIFY).
-        `size_for(F, C)` returns N.
+        `size_for(C)` returns N.
         """
         async with self._pool.connection() as conn, conn.transaction():
             job = await (
@@ -75,7 +75,7 @@ class JobStore:
                 )
                 return None
 
-            n = size_for(no_of_files, no_of_columns)
+            n = size_for(no_of_columns)
             groups = chunk(file_ids, n)
             single = len(groups) == 1  # the whole job fits in one map task: it writes the result
             task_ids = await self._insert_tasks(

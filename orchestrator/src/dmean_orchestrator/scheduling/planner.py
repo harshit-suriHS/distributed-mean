@@ -1,51 +1,50 @@
 """
-Task sizing (design §7): how many files a map task sums, and the merge fan-in.
+Task sizing: how many files a map task sums (N), and the merge fan-in (M).
 
-Tasks are sized by expected *time*, not by the number of workers (like Spark/Hadoop split
-sizes): a fleet that grows or shrinks after planning just takes more or fewer of the same
-~T-second tasks, so nothing has to be re-planned.
+Every task is about T seconds of work, computed from C alone: no assumption about the number of
+workers, so a fleet that grows or shrinks after planning just takes more or fewer of the same
+tasks, and nothing is re-planned. F only decides how many tasks there are (F / N).
+
+    cost per file = L + C × (bytes_per_value / B + 1 / R)
+                    ▲        ▲                    ▲
+                    latency  download (size / bandwidth)   parse
+    N = T / cost   (1 .. N_max)
+    M = max(2, N)  a partial costs about one input file to read, so a merge also takes ~T
+
+Download and parse are added as if sequential; prefetch overlaps them, so real tasks come out a
+little shorter than T, which is the safe direction.
 """
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class Sizing:
-    target_task_secs: float  # T: ~25 s, short enough for fairness and cheap retries
-    min_task_secs: float  # T_min: never millisecond tasks
-    per_file_secs: float  # L: fixed cost per input file (an S3 GET), measured ~5-10 ms locally
-    rate: float  # R: values/s one worker parses (~5M, measured)
-    min_tasks_per_job: int  # K: a big job splits into at least this many tasks
+    target_task_secs: float  # T: ~10 s: short tail behind slow workers, cheap retries
+    request_secs: float  # L: per-GET latency (first byte), ~8 ms under load locally
+    bytes_per_value: float  # CSV bytes per value: ~19.3 for random floats (measured)
+    bandwidth_bytes_per_sec: float  # B: download rate of one stream, ~150 MB/s locally
+    parse_values_per_sec: float  # R: CSV parse rate of one worker, ~5M values/s (measured)
     max_files_per_task: int  # N_max: safety cap
 
     def secs_per_file(self, no_of_columns: int) -> float:
-        """Expected cost of one input: fetching it plus parsing its C values."""
-        return self.per_file_secs + no_of_columns / self.rate
+        """Expected cost of one input (or partial): request latency, download, parse."""
+        per_value = (
+            self.bytes_per_value / self.bandwidth_bytes_per_sec + 1 / self.parse_values_per_sec
+        )
+        return self.request_secs + no_of_columns * per_value
 
 
-def files_per_task(no_of_files: int, no_of_columns: int, s: Sizing) -> int:
-    """
-    N = clamp( min( N_time, max( N_split, N_floor ) ), 1, N_max )
-
-    - N_time  = T / cost   files that take about T seconds (cost = L + C/R per file)
-    - N_split = ceil(F/K)  at least K tasks per job, so a big job spreads across workers
-    - N_floor = T_min/cost tasks never shorter than T_min
-    """
-    cost = s.secs_per_file(no_of_columns)
-    n_time = s.target_task_secs / cost
-    n_floor = s.min_task_secs / cost
-    n_split = math.ceil(no_of_files / s.min_tasks_per_job)
-    n = int(min(n_time, max(n_split, n_floor)))
+def files_per_task(no_of_columns: int, s: Sizing) -> int:
+    """N: as many files as take about T seconds."""
+    n = int(s.target_task_secs / s.secs_per_file(no_of_columns))
     return max(1, min(n, s.max_files_per_task))
 
 
 def merge_fan_in(no_of_columns: int, s: Sizing) -> int:
-    """A partial costs about one file (C values + a count), so a merge of M partials takes
-    about T seconds when M = N_time. At least 2: a merge needs two inputs."""
-    n_time = int(s.target_task_secs / s.secs_per_file(no_of_columns))
-    return max(2, min(n_time, s.max_files_per_task))
+    """M = max(2, N): a merge needs two inputs; otherwise it's sized exactly like a map."""
+    return max(2, files_per_task(no_of_columns, s))
 
 
 def chunk[T](items: Sequence[T], size: int) -> list[list[T]]:

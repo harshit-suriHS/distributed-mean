@@ -28,7 +28,7 @@ user ──upload CSVs (presigned policy)──► MinIO (S3)
    - `POST /jobs` creates the job as `validating` and returns `202` at once.
    - In the background the API lists the prefix and checks every file: the count matches F, each is a `.csv`, and each size can hold C values. Only then is the job `queued` for the orchestrator; otherwise it fails as `user_input` before any work runs.
    - No lock is held while listing: a short lease (`validating_until`) marks who is validating, and another API replica takes over if it lapses.
-2. **Plan.** The orchestrator splits the job into map tasks of N files each. N is sized from F and C (not W), so tasks take about 25 s.
+2. **Plan.** The orchestrator splits the job into map tasks of N files each. N comes from C alone (request latency + download + parse per file), so every task is about 10 s of work, whatever F or W.
 3. **Pull with leases.**
    - A free worker long-polls `Lease`, and the orchestrator picks a task at that moment.
    - It picks merges first; otherwise it takes the job with the fewest tasks in flight (max-min fairness, the same rule as the Hadoop Fair Scheduler and SQS fair queues).
@@ -61,7 +61,7 @@ docker ps --filter label=dmean.role=worker          # the worker containers
 docker compose down --remove-orphans                # stop everything, worker containers included
 ```
 
-With production sizing a task is ~25 s of work, so small demo jobs fit in a single task. To watch maps and merges on a small job, set `MAX_FILES_PER_TASK=10` in `.env` and restart the orchestrator (`docker compose up -d orchestrator`).
+With production sizing a task is ~10 s of work, so small demo jobs fit in a single task. To watch maps and merges on a small job, set `MAX_FILES_PER_TASK=10` in `.env` and restart the orchestrator (`docker compose up -d orchestrator`).
 
 Service URLs and ports:
 - UI: http://localhost:8080
@@ -106,7 +106,7 @@ Everything is in `.env` (see `.env.example`).
 |---|---|---|
 | `UPLOAD_TTL_HOURS` | 24 | uncommitted uploads expire and are deleted |
 | `MAX_UPLOAD_FILE_BYTES` | 32 MiB | per-file upload limit |
-| `TARGET_TASK_SECS`, `MAX_FILES_PER_TASK` | 25, 5000 | task sizing (orchestrator) |
+| `TARGET_TASK_SECS`, `MAX_FILES_PER_TASK` | 10, 5000 | task sizing (orchestrator) |
 | `LEASE_SECS`, `HEARTBEAT_SECS` | 30, 10 | lease length and renewal (orchestrator) |
 | `SLOWDOWN_SECS_PER_FILE` | 0 | make a worker artificially slow, for demos of heterogeneous speed |
 
@@ -140,7 +140,7 @@ Lint and types: `npx biome check` (api), `uv run ruff check && uv run pyright` (
 - **Failures:** a worker killed mid-task has its task retried elsewhere, and an orchestrator restart resumes the job. A bad input file fails the job with a clear reason.
 - **Load** (laptop):
   - 500 simulated workers: 444 tasks/s
-  - 1K simulated workers: 554 tasks/s, about 14× the real load at 1K workers with 25 s tasks
+  - 1K simulated workers: 554 tasks/s, about 5× the real load at 1K workers with 10 s tasks (100 tasks/s)
   - Tasks done per worker were proportional to its speed.
 
 ## Not done yet

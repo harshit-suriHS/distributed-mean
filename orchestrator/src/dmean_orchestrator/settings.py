@@ -34,29 +34,29 @@ class Settings(BaseSettings):
     grpc_host: str = "0.0.0.0"
     grpc_port: int = 50051
 
-    # Sizing (design §7): tasks sized by expected time, independent of the number of workers
-    target_task_secs: float = 25.0
-    min_task_secs: float = 5.0
-    per_file_secs: float = 0.008  # fixed cost per input file (S3 GET), measured ~8 ms locally
-    default_rate: float = 5_000_000.0  # values/s one worker parses (measured: ~0.2 s per 1M)
-    min_tasks_per_job: int = 8
+    # Sizing: every task is ~T seconds of work, from C alone (never from the number of workers)
+    target_task_secs: float = 10.0
+    request_secs: float = 0.008  # per-GET latency, measured ~8 ms under load locally
+    bytes_per_value: float = 19.3  # CSV bytes per value (random floats, measured)
+    bandwidth_mb_per_sec: float = 150.0  # one GET stream from MinIO, measured locally
+    parse_values_per_sec: float = 5_000_000.0  # np.loadtxt on one core, measured (~0.2 s per 1M)
     max_files_per_task: int = 5000
 
     @property
     def sizing(self) -> "Sizing":
         return Sizing(
             target_task_secs=self.target_task_secs,
-            min_task_secs=self.min_task_secs,
-            per_file_secs=self.per_file_secs,
-            rate=self.default_rate,
-            min_tasks_per_job=self.min_tasks_per_job,
+            request_secs=self.request_secs,
+            bytes_per_value=self.bytes_per_value,
+            bandwidth_bytes_per_sec=self.bandwidth_mb_per_sec * 1e6,
+            parse_values_per_sec=self.parse_values_per_sec,
             max_files_per_task=self.max_files_per_task,
         )
 
     # Leases (design §9)
     lease_secs: float = 30.0
     heartbeat_secs: int = 10
-    max_lease_secs: float = 250.0  # ~10 × target task duration: catches hung workers
+    max_lease_secs: float = 100.0  # 10 × target task length: catches hung workers
     max_attempts: int = 4
     min_backoff_secs: float = 2.0
     max_backoff_secs: float = 30.0
