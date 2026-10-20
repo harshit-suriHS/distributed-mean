@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import type { WorkersView } from "../api";
 
 export function Workers({
@@ -9,9 +9,27 @@ export function Workers({
   onScale: (desired: number) => Promise<unknown>;
 }) {
   const [error, setError] = useState("");
-  const scale = (n: number) => {
+  const [draft, setDraft] = useState<string | null>(null); // null: show the current W
+  const [applying, setApplying] = useState(false);
+  const current = view?.desired_workers;
+  const input = draft ?? (current === undefined ? "" : String(current));
+
+  const wanted = Number(input);
+  const valid = input !== "" && Number.isInteger(wanted) && wanted >= 0 && wanted <= 10_000;
+
+  const apply = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!valid) return;
     setError("");
-    onScale(Math.max(0, n)).catch((e: Error) => setError(e.message));
+    setApplying(true);
+    try {
+      await onScale(wanted);
+      setDraft(null);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setApplying(false);
+    }
   };
 
   return (
@@ -19,16 +37,23 @@ export function Workers({
       <div className="row">
         <h2>Workers</h2>
         {view && (
-          <div className="scale">
-            <span className="muted">W =</span>
-            <button type="button" onClick={() => scale(view.desired_workers - 1)}>
-              −
+          <form className="scale" onSubmit={apply}>
+            <label className="muted" htmlFor="desired-workers">
+              W
+            </label>
+            <input
+              id="desired-workers"
+              type="number"
+              min={0}
+              max={10000}
+              step={1}
+              value={input}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+            <button type="submit" disabled={!valid || applying || wanted === current}>
+              {applying ? "applying…" : "apply"}
             </button>
-            <strong>{view.desired_workers}</strong>
-            <button type="button" onClick={() => scale(view.desired_workers + 1)}>
-              +
-            </button>
-          </div>
+          </form>
         )}
       </div>
       {error && <p className="error">{error}</p>}

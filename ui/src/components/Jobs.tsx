@@ -24,11 +24,6 @@ function JobRow({ job }: { job: JobSummary }) {
         <td>
           {job.no_of_files} × {job.no_of_columns}
         </td>
-        <td>
-          <div className="bar">
-            <div className={`fill ${job.status}`} style={{ width: `${job.percent}%` }} />
-          </div>
-        </td>
         <td className="muted">{new Date(job.created_at).toLocaleTimeString()}</td>
         <td>
           {job.status === "succeeded" && (
@@ -44,18 +39,12 @@ function JobRow({ job }: { job: JobSummary }) {
           )}
         </td>
       </tr>
-      {open && details && (
+      {open && details?.error && (
         <tr className="details">
-          <td colSpan={6}>
-            tasks:{" "}
-            {Object.entries(details.tasks)
-              .map(([k, v]) => `${k} ${v}`)
-              .join(" · ")}
-            {details.error && (
-              <div className="error">
-                {details.failure_type}: {details.error}
-              </div>
-            )}
+          <td colSpan={5}>
+            <div className="error">
+              {details.failure_type}: {details.error}
+            </div>
           </td>
         </tr>
       )}
@@ -76,7 +65,6 @@ export function Jobs({ jobs }: { jobs: JobSummary[] }) {
               <th>job</th>
               <th>status</th>
               <th>F × C</th>
-              <th>progress</th>
               <th>created</th>
               <th />
             </tr>
