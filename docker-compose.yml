@@ -121,6 +121,22 @@ services:
     restart: always
     init: true  # PID 1 forwards signals (PID 1 itself ignores signals it has no handler for)
 
+  # Scheduled storage cleanup: one sweep per CLEANUP_EVERY_SECS (hourly). Deletes a job's inputs and
+  # partials CLEANUP_AFTER_HOURS (24) after it ends, and expires abandoned uploads. On Kubernetes:
+  # a CronJob running the same command.
+  cleanup:
+    build: ./orchestrator
+    command: ["sh", "-c", "while true; do /app/.venv/bin/dmean-cleanup; sleep $${CLEANUP_EVERY_SECS:-3600}; done"]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      S3_ENDPOINT: http://minio:9000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    init: true
+
   # No worker service: the supervisor starts and stops worker processes in its container to
   # match settings.desired_workers (PUT /workers changes it). On Kubernetes, a Deployment of
   # the worker image with replicas = W replaces the supervisor.

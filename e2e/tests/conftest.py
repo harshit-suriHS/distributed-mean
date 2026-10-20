@@ -51,7 +51,6 @@ ORCHESTRATOR_ENV = {
     "HEARTBEAT_SECS": "1",
     "MIN_BACKOFF_SECS": "0.5",
     "MAX_BACKOFF_SECS": "2",
-    "CLEANUP_INTERVAL_SECS": "2",
     "TIMER_TICK_SECS": "0.1",
     "ADVISORY_LOCK_KEY": "4343",  # its own lock: a dev orchestrator on 4242 doesn't block it
 }

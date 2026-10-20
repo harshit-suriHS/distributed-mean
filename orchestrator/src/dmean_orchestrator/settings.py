@@ -33,7 +33,9 @@ class Settings(BaseSettings):
     s3_bucket: str
 
     advisory_lock_key: int = 4242  # only one orchestrator holds it; a second copy waits
-    cleanup_interval_secs: float = 300.0  # sweep: interrupted cleanups, expired uploads
+    cleanup_after_hours: float = (
+        24.0  # dmean-cleanup deletes a job's inputs/partials this long after it ends
+    )
 
     grpc_host: str = "0.0.0.0"
     grpc_port: int = 50051

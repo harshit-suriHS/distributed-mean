@@ -15,7 +15,6 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from psycopg_pool import AsyncConnectionPool
 
-from dmean_orchestrator.database.cleanup_store import CleanupStore
 from dmean_orchestrator.database.job_store import JobStore
 from dmean_orchestrator.database.task_store import TaskStore
 from dmean_orchestrator.rpc import admin_pb2_grpc
@@ -23,8 +22,6 @@ from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
 from dmean_orchestrator.rpc.admin_service import AdminService
 from dmean_orchestrator.rpc.service import TaskQueueService
 from dmean_orchestrator.settings import Settings
-from dmean_orchestrator.storage.cleanup import Cleaner
-from dmean_orchestrator.storage.s3 import ObjectStore
 
 
 class IntegrationSettings(Settings):
@@ -41,6 +38,7 @@ FAST = {
     "max_backoff_secs": 1.0,
     "timer_tick_secs": 0.05,
     "max_files_per_task": 2,  # small tasks, so planning and merging show up with a few files
+    "cleanup_after_hours": 24,
 }
 
 
@@ -65,10 +63,7 @@ async def start_orchestrator(
     fatal: list[BaseException] = []
     async with AsyncConnectionPool(settings.db_dsn, min_size=1, max_size=5, open=False) as pool:
         await pool.wait()
-        cleaner = Cleaner(CleanupStore(pool), ObjectStore(settings))
-        service = TaskQueueService(
-            settings, TaskStore(pool), JobStore(pool), fatal.append, cleaner=cleaner
-        )
+        service = TaskQueueService(settings, TaskStore(pool), JobStore(pool), fatal.append)
         if rebuild:
             await service.rebuild()
         server = grpc.aio.server()

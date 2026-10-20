@@ -9,16 +9,18 @@ class CleanupStore:
     def __init__(self, pool: AsyncConnectionPool[Any]) -> None:
         self._pool = pool
 
-    async def leftovers(self, job_id: int) -> list[tuple[int, str]]:
-        """(file id, key) of a finished job's inputs and partials still in storage."""
+    async def leftovers(self, job_id: int, after_hours: float) -> list[tuple[int, str]]:
+        """(file id, key) of inputs and partials still in storage, for a job that ended more
+        than after_hours ago."""
         async with self._pool.connection() as conn:
             rows = await (
                 await conn.execute(
                     """SELECT f.id, f.key FROM files f JOIN jobs j ON j.id = f.job_id
                         WHERE f.job_id = %s AND f.type IN ('input', 'partial')
                           AND f.deleted_at IS NULL
-                          AND j.status IN ('succeeded', 'failed')""",
-                    (job_id,),
+                          AND j.status IN ('succeeded', 'failed')
+                          AND j.completed_at <= now() - make_interval(secs => %s)""",
+                    (job_id, after_hours * 3600),
                 )
             ).fetchall()
         return [(int(r[0]), str(r[1])) for r in rows]
@@ -30,14 +32,16 @@ class CleanupStore:
                 (file_ids,),
             )
 
-    async def finished_jobs_with_leftovers(self) -> list[int]:
-        """Finished jobs whose cleanup didn't happen or didn't finish (the sweep retries them)."""
+    async def finished_jobs_with_leftovers(self, after_hours: float) -> list[int]:
+        """Jobs that ended more than after_hours ago and still have inputs or partials."""
         async with self._pool.connection() as conn:
             rows = await (
                 await conn.execute(
                     """SELECT DISTINCT f.job_id FROM files f JOIN jobs j ON j.id = f.job_id
                         WHERE j.status IN ('succeeded', 'failed')
-                          AND f.type IN ('input', 'partial') AND f.deleted_at IS NULL"""
+                          AND j.completed_at <= now() - make_interval(secs => %s)
+                          AND f.type IN ('input', 'partial') AND f.deleted_at IS NULL""",
+                    (after_hours * 3600,),
                 )
             ).fetchall()
         return [int(r[0]) for r in rows]

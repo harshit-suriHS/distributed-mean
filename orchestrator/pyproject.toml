@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 dmean-orchestrator = "dmean_orchestrator.main:main"
+dmean-cleanup = "dmean_orchestrator.cleanup_job:main"
 
 [dependency-groups]
 dev = [

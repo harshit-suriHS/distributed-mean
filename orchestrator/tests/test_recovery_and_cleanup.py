@@ -13,9 +13,9 @@ from conftest import (
     object_exists,
     report_done,
     start_orchestrator,
-    wait_for,
 )
 
+from dmean_orchestrator.cleanup_job import run_once
 from dmean_orchestrator.main import serve
 from dmean_orchestrator.rpc import task_queue_pb2 as pb
 
@@ -111,35 +111,44 @@ async def test_a_second_orchestrator_waits_for_the_lock(settings: IntegrationSet
     assert await asyncio.wait_for(second, timeout=10) == 0
 
 
-# ---- cleanup --------------------------------------------------------------------------------
+# ---- cleanup (the scheduled dmean-cleanup job) -----------------------------------------------
 
 
-async def test_finished_job_inputs_and_partials_are_deleted_result_kept(
+def age_job(db: Db, job_id: int, hours: float) -> None:
+    """Pretends the job ended `hours` ago."""
+    db.admin.execute(
+        "UPDATE jobs SET completed_at = now() - %s * interval '1 hour' WHERE id = %s",
+        (hours, job_id),
+    )
+
+
+async def test_cleanup_waits_24h_after_a_job_ends_then_keeps_only_the_result(
     orch: Orchestrator, db: Db, objects: Any, settings: IntegrationSettings
 ) -> None:
     job_id = db.queued_job(no_of_files=3)
-    inputs = [f["key"] for f in db.files(job_id)]
-    for key in inputs:
-        objects.put_object(Bucket=settings.s3_bucket, Key=key, Body=b"1,2,3\n")
+    for f in db.files(job_id):
+        objects.put_object(Bucket=settings.s3_bucket, Key=f["key"], Body=b"1,2,3\n")
     await orch.service.plan(job_id)
-
     await finish_job(orch, db, job_id, objects)
     assert db.job_row(job_id)["status"] == "succeeded"
 
-    def cleaned() -> bool:
-        return all(f["deleted"] for f in db.files(job_id) if f["type"] != "result")
+    await run_once(settings)  # just finished: nothing is deleted
+    assert not any(f["deleted"] for f in db.files(job_id))
+    assert all(object_exists(objects, settings.s3_bucket, f["key"]) for f in db.files(job_id))
 
-    await wait_for(cleaned)
+    age_job(db, job_id, hours=25)
+    await run_once(settings)
+
     files = db.files(job_id)
     for f in files:
-        exists = object_exists(objects, settings.s3_bucket, f["key"])
-        assert exists == (f["type"] == "result"), f
-    [result] = [f for f in files if f["type"] == "result"]
-    assert not result["deleted"]
-    objects.delete_object(Bucket=settings.s3_bucket, Key=result["key"])
+        kept = f["type"] == "result"
+        assert f["deleted"] == (not kept), f
+        assert object_exists(objects, settings.s3_bucket, f["key"]) == kept, f
+    result_key = next(f["key"] for f in files if f["type"] == "result")
+    objects.delete_object(Bucket=settings.s3_bucket, Key=result_key)
 
 
-async def test_failed_job_inputs_are_deleted(
+async def test_cleanup_also_covers_failed_jobs(
     orch: Orchestrator, db: Db, objects: Any, settings: IntegrationSettings
 ) -> None:
     job_id = db.queued_job(no_of_files=4)
@@ -157,34 +166,29 @@ async def test_failed_job_inputs_are_deleted(
             failed=pb.Failed(failure_type=pb.USER_INPUT, retryable=False, error="bad csv"),
         )
     )
+    assert db.job_row(job_id)["status"] == "failed"
 
-    await wait_for(lambda: all(f["deleted"] for f in db.files(job_id)))
+    age_job(db, job_id, hours=25)
+    await run_once(settings)
+
+    assert all(f["deleted"] for f in db.files(job_id))
     assert not any(object_exists(objects, settings.s3_bucket, k) for k in inputs)
 
 
-async def test_sweep_expires_abandoned_uploads_and_retries_cleanups(
-    orch: Orchestrator, db: Db, objects: Any, settings: IntegrationSettings
+async def test_cleanup_expires_abandoned_uploads_but_not_fresh_ones(
+    db: Db, objects: Any, settings: IntegrationSettings
 ) -> None:
     abandoned = db.upload(expired=True)
     fresh = db.upload(expired=False)
     for upload in (abandoned, fresh):
         for name in ("a.csv", "b.csv"):
             objects.put_object(Bucket=settings.s3_bucket, Key=f"inputs/{upload}/{name}", Body=b"1")
-    # a finished job whose cleanup never ran (e.g. the orchestrator died right after)
-    job_id = db.queued_job(no_of_files=2)
-    leftover = db.files(job_id)[0]["key"]
-    objects.put_object(Bucket=settings.s3_bucket, Key=leftover, Body=b"1,2,3\n")
-    db.admin.execute("UPDATE jobs SET status = 'succeeded' WHERE id = %s", (job_id,))
 
-    cleaner = orch.service._cleaner  # pyright: ignore[reportPrivateUsage]
-    assert cleaner is not None
-    await cleaner.sweep()
+    await run_once(settings)
 
     assert db.upload_status(abandoned) == "expired"
     assert db.upload_status(fresh) == "open"
     assert not object_exists(objects, settings.s3_bucket, f"inputs/{abandoned}/a.csv")
     assert object_exists(objects, settings.s3_bucket, f"inputs/{fresh}/a.csv")
-    assert not object_exists(objects, settings.s3_bucket, leftover)
-    assert all(f["deleted"] for f in db.files(job_id))
     for name in ("a.csv", "b.csv"):
         objects.delete_object(Bucket=settings.s3_bucket, Key=f"inputs/{fresh}/{name}")

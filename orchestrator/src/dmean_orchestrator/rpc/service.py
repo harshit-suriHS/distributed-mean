@@ -31,7 +31,6 @@ from dmean_orchestrator.scheduling.fair_queue import (
 from dmean_orchestrator.scheduling.merge_pool import Partial, covers, take_merges
 from dmean_orchestrator.scheduling.planner import files_per_task, merge_fan_in
 from dmean_orchestrator.settings import Settings
-from dmean_orchestrator.storage.cleanup import Cleaner
 from dmean_orchestrator.storage.keys import partial_key, result_key
 
 log = structlog.get_logger()
@@ -53,10 +52,7 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         store: TaskStore,
         jobs: JobStore,
         on_fatal: Callable[[BaseException], None],
-        cleaner: Cleaner | None = None,
     ) -> None:
-        self._cleaner = cleaner
-        self._background: set[asyncio.Task[None]] = set()
         self._settings = settings
         self._store = store
         self._job_store = jobs
@@ -226,7 +222,6 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
             log.info("job succeeded", job_id=job_id)
             self.queue.remove_job(job_id)
             self._jobs.pop(job_id, None)
-            self._clean_later(job_id)
             return
         job = self._jobs.get(job_id)
         if job is None:
@@ -286,35 +281,6 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         self._jobs.pop(job_id, None)
         await self._store.fail_job(job_id, task_id, failure_type, error)
         log.warning("job failed", job_id=job_id, failure_type=failure_type, error=error)
-        self._clean_later(job_id)
-
-    def _clean_later(self, job_id: int) -> None:
-        """Deletes a finished job's inputs and partials in the background. A failure is only
-        logged: the periodic sweep retries it."""
-        if self._cleaner is None:
-            return
-        cleaner = self._cleaner
-
-        async def clean() -> None:
-            try:
-                await cleaner.clean_job(job_id)
-            except Exception as err:
-                log.warning("cleanup failed, the sweep will retry", job_id=job_id, error=repr(err))
-
-        task = asyncio.create_task(clean())
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
-
-    async def run_cleanup(self, interval_secs: float) -> None:
-        """Periodic sweep: interrupted cleanups and expired uploads."""
-        if self._cleaner is None:
-            return
-        while True:
-            try:
-                await self._cleaner.sweep()
-            except Exception as err:
-                log.warning("cleanup sweep failed, retrying next round", error=repr(err))
-            await asyncio.sleep(interval_secs)
 
     async def _on_timers(self) -> None:
         now = self._now()

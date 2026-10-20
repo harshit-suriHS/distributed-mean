@@ -2,7 +2,8 @@
 Orchestrator process: one asyncio loop serving the gRPC TaskQueue and running its timers.
 
 Startup: take the advisory lock (a second copy waits here) → rebuild memory from Postgres →
-serve gRPC → listen for new jobs (and plan any queued) → timers and the cleanup sweep.
+serve gRPC → listen for new jobs (and plan any queued) → timers. Storage cleanup is a separate
+scheduled job (`dmean-cleanup`).
 """
 
 import asyncio
@@ -14,7 +15,6 @@ import psycopg
 import structlog
 from psycopg_pool import AsyncConnectionPool
 
-from dmean_orchestrator.database.cleanup_store import CleanupStore
 from dmean_orchestrator.database.job_store import JobStore
 from dmean_orchestrator.database.task_store import TaskStore
 from dmean_orchestrator.logs import configure_logging
@@ -23,8 +23,6 @@ from dmean_orchestrator.rpc import task_queue_pb2_grpc as pb_grpc
 from dmean_orchestrator.rpc.admin_service import AdminService
 from dmean_orchestrator.rpc.service import TaskQueueService
 from dmean_orchestrator.settings import Settings
-from dmean_orchestrator.storage.cleanup import Cleaner
-from dmean_orchestrator.storage.s3 import ObjectStore
 
 log = structlog.get_logger()
 
@@ -63,10 +61,7 @@ async def serve(settings: Settings, stop: asyncio.Event) -> int:
             settings.db_dsn, min_size=2, max_size=settings.db_pool_size, open=False
         ) as pool:
             await pool.wait()
-            cleaner = Cleaner(CleanupStore(pool), ObjectStore(settings))
-            service = TaskQueueService(
-                settings, TaskStore(pool), JobStore(pool), on_fatal, cleaner=cleaner
-            )
+            service = TaskQueueService(settings, TaskStore(pool), JobStore(pool), on_fatal)
             await service.rebuild()  # before serving: no lease is handed out from a partial view
 
             server = grpc.aio.server()
@@ -78,7 +73,6 @@ async def serve(settings: Settings, stop: asyncio.Event) -> int:
             background = [
                 asyncio.create_task(service.run_timers()),
                 asyncio.create_task(service.listen_for_jobs(settings.db_dsn)),
-                asyncio.create_task(service.run_cleanup(settings.cleanup_interval_secs)),
                 asyncio.create_task(hold_lock(lock_conn, lock_lost)),
             ]
             log.info("orchestrator listening", port=settings.grpc_port)
