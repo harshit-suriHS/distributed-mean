@@ -5,6 +5,7 @@ description = "Keeps settings.desired_workers worker processes running (PUT /wor
 requires-python = ">=3.13"
 dependencies = [
   "dmean-worker",  # the worker it starts, installed in the same environment
+  "docker==7.1.0",
   "grpcio==1.84.0",
   "protobuf==7.36.2",
   "psycopg[binary]==3.3.6",

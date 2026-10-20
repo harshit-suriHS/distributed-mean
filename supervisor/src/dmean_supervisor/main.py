@@ -3,9 +3,10 @@ Supervisor process: keeps `settings.desired_workers` worker processes running.
 
 Every reconcile_secs, and at once on NOTIFY settings_changed (PUT /workers): read W from
 Postgres, ask the orchestrator what it sees (Admin.ListWorkers), then spawn, drain or kill.
-Workers are this process's children, so they stop with it: a graceful stop drains them, a crash
-or SIGKILL loses only their in-flight tasks (leases expire, tasks are retried). On Kubernetes this
-job belongs to a Deployment (replicas = W) instead, and workers outlive any controller.
+Workers are containers (RUNTIME=docker, compose) or child processes (RUNTIME=process). Containers
+outlive the supervisor: when it stops they keep working, and it adopts them on restart. Child
+processes stop with it (drained on a graceful stop; on a crash only in-flight tasks are lost and
+retried). On Kubernetes this job belongs to a Deployment (replicas = W) instead.
 """
 
 import signal
@@ -16,6 +17,7 @@ import grpc
 import psycopg
 import structlog
 
+from dmean_supervisor.docker_fleet import DockerFleet
 from dmean_supervisor.fleet import Fleet
 from dmean_supervisor.logs import configure_logging
 from dmean_supervisor.reconcile import Seen, plan
@@ -42,8 +44,17 @@ class Orchestrator:
         self._channel.close()
 
 
+def make_fleet(settings: SupervisorSettings) -> Fleet | DockerFleet:
+    if settings.runtime == "docker":
+        return DockerFleet(settings.worker_image, settings.worker_id_prefix)
+    return Fleet(settings.worker_command, settings.worker_id_prefix)
+
+
 def reconcile_once(
-    settings: SupervisorSettings, fleet: Fleet, orchestrator: Orchestrator, desired: int
+    settings: SupervisorSettings,
+    fleet: Fleet | DockerFleet,
+    orchestrator: Orchestrator,
+    desired: int,
 ) -> None:
     for worker_id, code in fleet.reap():
         log.info("worker exited", worker=worker_id, code=code)
@@ -69,7 +80,7 @@ def reconcile_once(
 def run(
     settings: SupervisorSettings, stop: threading.Event, hurry: threading.Event | None = None
 ) -> None:
-    fleet = Fleet(settings.worker_command, settings.worker_id_prefix)
+    fleet = make_fleet(settings)
     orchestrator = Orchestrator(settings.orchestrator_addr)
     try:
         with psycopg.connect(settings.db_dsn, autocommit=True) as conn:
@@ -86,8 +97,7 @@ def run(
                 for _ in conn.notifies(timeout=settings.reconcile_secs, stop_after=1):
                     pass
     finally:
-        log.info("supervisor stopping: draining workers")
-        fleet.stop_all(settings.drain_timeout_secs, hurry)
+        fleet.shutdown(settings.drain_timeout_secs, hurry)
         orchestrator.close()
         log.info("supervisor stopped")
 

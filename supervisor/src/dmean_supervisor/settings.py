@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,6 +26,12 @@ class SupervisorSettings(BaseSettings):
     supervisor_db_password: str
 
     orchestrator_addr: str = "localhost:50051"
+
+    # process: workers are child processes (tests, a plain dev machine).
+    # docker: workers are containers started through the Docker socket (compose); they keep
+    # running when the supervisor stops and are adopted again on restart.
+    runtime: Literal["process", "docker"] = "process"
+    worker_image: str = "dmean-worker:local"  # docker runtime
     worker_id_prefix: str = "worker"  # children are named {prefix}-{n}
     # the worker package is installed in this service's environment
     worker_command: list[str] = [sys.executable, "-m", "dmean_worker.main"]

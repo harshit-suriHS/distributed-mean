@@ -47,7 +47,8 @@ Requires Docker and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 cp .env.example .env
-docker compose up -d --build        # postgres, minio, migrations, api, orchestrator, supervisor (4 workers), ui
+docker compose up -d --build        # postgres, minio, migrations, api, orchestrator, supervisor, ui;
+                                    # the supervisor then starts 4 worker containers
 open http://localhost:8080          # the dashboard: submit jobs, scale W, watch workers and the live log
 uv run scripts/demo.py --files 50 --columns 1000    # or from the command line
 ```
@@ -56,6 +57,8 @@ uv run scripts/demo.py --files 50 --columns 1000    # or from the command line
 uv run scripts/demo.py --values "1,2,3" "4,5,6"     # the brief's example → [2.5, 3.5, 4.5]
 curl -X PUT localhost:3000/workers -H 'content-type: application/json' -d '{"desired_workers": 8}'   # the supervisor follows within seconds
 docker compose logs -f orchestrator supervisor      # JSON logs with job_id / task_id / worker_id
+docker ps --filter label=dmean.role=worker          # the worker containers
+docker compose down --remove-orphans                # stop everything, worker containers included
 ```
 
 With production sizing a task is ~25 s of work, so small demo jobs fit in a single task. To watch maps and merges on a small job, set `MAX_FILES_PER_TASK=10` in `.env` and restart the orchestrator (`docker compose up -d orchestrator`).
@@ -88,7 +91,7 @@ Files are CSV: an input is one line of `C` comma-separated numbers, and so is th
 | `api/` | Node/Express/TS public API: uploads, jobs. Layers: routes → service → repo, zod DTOs |
 | `orchestrator/` | Python: planner, fair lease-based queue (gRPC server), merge pool, recovery, storage cleanup |
 | `worker/` | Python: lease → sum the CSVs (streaming, NumPy) → write the partial or result → report |
-| `supervisor/` | Python: keeps `desired_workers` worker processes running (spawn, drain, replace hung ones) |
+| `supervisor/` | Python: keeps `desired_workers` workers running (start, drain, replace hung ones). In compose they are containers started through the Docker socket, which keep running if the supervisor stops; in tests, child processes |
 | `ui/` | Vite + React dashboard: stats, workers + W control, jobs, live log, new job |
 | `db/` | dbmate migrations and the role setup script |
 | `e2e/` | end-to-end tests that run every service as a real process |
@@ -118,14 +121,14 @@ docker compose up -d postgres minio minio-init db-roles migrate
 (cd worker && uv sync && uv run dmean-worker)          # or: (cd supervisor && uv sync && uv run dmean-supervisor)
 ```
 
-Tests (stop the dockerised api/orchestrator/supervisor first, so they don't pick up test jobs: `docker compose stop api orchestrator supervisor`):
+Tests (stop the dockerised api/orchestrator/supervisor first, so they don't pick up test jobs: `docker compose stop api orchestrator supervisor && docker rm -f $(docker ps -aq --filter label=dmean.role=worker)`):
 
 | Suite | Command | Covers |
 |---|---|---|
 | API | `cd api && npm test` | uploads, commit, DTOs, against real Postgres + MinIO |
 | Orchestrator | `cd orchestrator && uv run pytest` | fair queue, sizing, merge pool, gRPC service, restart recovery, cleanup |
 | Worker | `cd worker && uv run pytest` | CSV format, summing, the worker loop against a fake orchestrator |
-| Supervisor | `cd supervisor && uv run pytest` | scaling decisions, spawn / drain / replace, following `PUT /workers` via NOTIFY |
+| Supervisor | `cd supervisor && uv run pytest` | scaling decisions, spawn / drain / replace, following `PUT /workers` via NOTIFY, worker containers outliving the supervisor and being adopted |
 | End to end | `cd e2e && uv run pytest` | real processes: correct means, concurrent jobs, killed worker, orchestrator restart, slow worker |
 | Load | `cd orchestrator && uv run python scripts/load_test.py --workers 500` | 500–1K simulated workers on the real protocol |
 

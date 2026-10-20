@@ -84,3 +84,7 @@ class Fleet:
         for proc in self._procs.values():
             proc.wait()
         self.reap()
+
+    def shutdown(self, timeout_secs: float, hurry: threading.Event | None = None) -> None:
+        """The supervisor is stopping: its child processes can't outlive it, so drain them."""
+        self.stop_all(timeout_secs, hurry)

@@ -136,9 +136,19 @@ services:
     restart: unless-stopped
     init: true
 
-  # No worker service: the supervisor starts and stops worker processes in its container to
-  # match settings.desired_workers (PUT /workers changes it). On Kubernetes, a Deployment of
-  # the worker image with replicas = W replaces the supervisor.
+  # The worker image only. Nothing runs from this service (replicas: 0): the supervisor starts
+  # worker containers from the image to match settings.desired_workers (PUT /workers changes it).
+  worker:
+    build: ./worker
+    image: dmean-worker:local
+    deploy:
+      replicas: 0
+
+  # Starts and stops worker containers through the Docker socket (RUNTIME=docker). Workers are
+  # owned by Docker, not by the supervisor: if it stops or crashes they keep working, and it
+  # adopts them on restart. The socket is root on the host, accepted for local use; in production
+  # the platform does this job (a Kubernetes Deployment or ECS service with desired count = W).
+  # `docker compose down --remove-orphans` also removes the worker containers.
   supervisor:
     build:
       context: .
@@ -148,13 +158,16 @@ services:
       POSTGRES_HOST: postgres
       ORCHESTRATOR_ADDR: orchestrator:50051
       S3_ENDPOINT: http://minio:9000
+      RUNTIME: docker
+      WORKER_IMAGE: dmean-worker:local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root  # the Docker socket is root-owned
     depends_on:
       migrate:
         condition: service_completed_successfully
       orchestrator:
         condition: service_started
-    # SIGTERM drains every worker (each finishes its current task); give them time
-    stop_grace_period: 5m
     restart: always
     init: true
 
