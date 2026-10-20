@@ -5,6 +5,7 @@ from collections.abc import Callable
 import numpy as np
 
 from dmean_worker.processing.outcome import FailureType
+from dmean_worker.processing.prefetch import prefetched
 from dmean_worker.processing.task import Task
 from dmean_worker.storage.csv_format import (
     InvalidInput,
@@ -25,18 +26,21 @@ class TaskFailed(Exception):
 
 
 def sum_inputs(
-    task: Task, load_text: Callable[[str], str], should_stop: Callable[[], bool]
+    task: Task,
+    load_text: Callable[[str], str],
+    should_stop: Callable[[], bool],
+    prefetch: int = 1,
 ) -> tuple[Vector, int] | None:
     """
-    Streams the task's inputs into one accumulator: memory is the accumulator plus one file,
-    whatever the number of inputs. Returns None if the job stopped meanwhile.
+    Streams the task's inputs into one accumulator, fetching up to `prefetch` files ahead:
+    memory is the accumulator plus at most `prefetch` files (≤ 4 + 1), whatever the number of
+    inputs. Returns None if the job stopped meanwhile.
     """
     acc = np.zeros(task.no_of_columns, dtype=np.float64)
     count = 0
-    for key in task.input_keys:
+    for key, text in prefetched(task.input_keys, load_text, prefetch):
         if should_stop():
             return None
-        text = load_text(key)
         if task.kind == "map":
             try:
                 values = parse_input(text, task.no_of_columns)

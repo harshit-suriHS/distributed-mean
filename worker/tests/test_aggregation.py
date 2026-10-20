@@ -98,7 +98,7 @@ def test_stops_when_the_job_stops() -> None:
     checks = iter([False, True])
     summed = sum_inputs(make_task("map", ["a", "b", "c"], 3), load, lambda: next(checks))
     assert summed is None
-    assert loaded == ["a"]  # stopped before reading the second file
+    assert loaded == ["a", "b"]  # stopped before summing the second file (already fetched)
 
 
 def test_sum_matches_numpy_for_many_files() -> None:
@@ -110,3 +110,65 @@ def test_sum_matches_numpy_for_many_files() -> None:
     assert summed is not None
     means = parse_input(render_output(task, *summed), 64)
     np.testing.assert_allclose(means, data.mean(axis=0), rtol=1e-13)
+
+
+def test_prefetch_keeps_at_most_four_files_ahead_and_sums_identically() -> None:
+    import threading
+    import time
+
+    rng = np.random.default_rng(9)
+    rows = rng.random((40, 50))
+    files = {f"f{i}": format_row(r) for i, r in enumerate(rows)}
+    task = make_task("map", list(files), 40, columns=50)
+    lock = threading.Lock()
+    started = 0
+    consumed = 0
+    max_ahead = 0
+
+    def load(key: str) -> str:
+        nonlocal started, max_ahead
+        with lock:
+            started += 1
+            max_ahead = max(max_ahead, started - consumed)
+        time.sleep(0.01)  # an S3 GET
+        return files[key]
+
+    def stop() -> bool:  # called once per file, just before it is summed
+        nonlocal consumed
+        with lock:
+            consumed += 1
+        return False
+
+    t0 = time.perf_counter()
+    parallel = sum_inputs(task, load, stop, prefetch=4)
+    parallel_secs = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    sequential = sum_inputs(task, files.__getitem__, never_stop)
+    assert parallel is not None and sequential is not None
+    # same files, same order: bit-for-bit identical sums
+    assert parallel[0].tobytes() == sequential[0].tobytes() and parallel[1] == 40
+    # never more than 4 files fetched ahead (+ the accumulator = 5 in memory)
+    assert max_ahead <= 4
+    # 40 GETs of 10 ms: ~0.4 s one by one, ~0.1 s four at a time
+    assert parallel_secs < 0.25
+
+
+def test_prefetch_window_is_capped_at_four() -> None:
+    from dmean_worker.processing.prefetch import prefetched
+
+    seen = list(prefetched(["a", "b", "c"], lambda k: k.upper(), window=99))
+    assert seen == [("a", "A"), ("b", "B"), ("c", "C")]
+
+
+def test_stopping_drops_queued_fetches() -> None:
+    loaded: list[str] = []
+    files = {f"f{i}": "1,2,3\n" for i in range(50)}
+
+    def load(key: str) -> str:
+        loaded.append(key)
+        return files[key]
+
+    checks = iter([False, False, True])
+    task = make_task("map", list(files), 50)
+    assert sum_inputs(task, load, lambda: next(checks), prefetch=4) is None
+    assert len(loaded) <= 7  # 2 summed + at most a window ahead, not all 50

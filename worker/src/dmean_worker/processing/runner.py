@@ -14,9 +14,12 @@ log = structlog.get_logger()
 
 
 class TaskRunner:
-    def __init__(self, storage: Storage, slowdown_secs_per_file: float = 0.0) -> None:
+    def __init__(
+        self, storage: Storage, slowdown_secs_per_file: float = 0.0, prefetch_files: int = 1
+    ) -> None:
         self._storage = storage
         self._slowdown = slowdown_secs_per_file
+        self._prefetch = prefetch_files
 
     def run(self, task: Task, should_stop: Callable[[], bool]) -> Outcome:
         """Never raises: every result, including errors, becomes an Outcome to report."""
@@ -28,7 +31,7 @@ class TaskRunner:
                 return Done(task.output_key, size)
 
             started = time.perf_counter()
-            summed = sum_inputs(task, self._load, should_stop)
+            summed = sum_inputs(task, self._load, should_stop, self._prefetch)
             if summed is None:
                 log.info("told to stop, abandoning the task")
                 return Abandoned()

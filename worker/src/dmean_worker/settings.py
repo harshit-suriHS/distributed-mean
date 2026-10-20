@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +29,9 @@ class Settings(BaseSettings):
     s3_access_key: str
     s3_secret_key: str
     s3_bucket: str
+
+    # Files fetched ahead while one is summed: ≤ 4, so with the accumulator ≤ 5 files in memory
+    prefetch_files: int = Field(default=4, ge=1, le=4)
 
     # Local demos of heterogeneous speed: extra seconds per input file (0 in production)
     slowdown_secs_per_file: float = 0.0

@@ -67,7 +67,7 @@ def main() -> None:
     structlog.contextvars.bind_contextvars(worker_id=worker_id)
 
     client = TaskQueueClient(settings.orchestrator_addr, worker_id)
-    runner = TaskRunner(Storage(settings), settings.slowdown_secs_per_file)
+    runner = TaskRunner(Storage(settings), settings.slowdown_secs_per_file, settings.prefetch_files)
     log.info("worker started", orchestrator=settings.orchestrator_addr)
     started = time.monotonic()
     run_worker(settings, client, runner, draining)
