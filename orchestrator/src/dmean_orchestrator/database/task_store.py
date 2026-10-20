@@ -57,6 +57,7 @@ class JobSnapshot:
     created_at: datetime
     no_of_files: int
     files_per_task: int
+    no_of_columns: int
     pending: list[PendingTask]
     running: list[RunningTask]  # leased when the orchestrator stopped: restored with grace leases
     unmerged: list[tuple[int, int]]  # (file_id, no_of_files) of partials no merge has taken yet
@@ -188,7 +189,8 @@ class TaskStore:
         async with self._pool.connection() as conn:
             job = await (
                 await conn.execute(
-                    "SELECT created_at, no_of_files, files_per_task FROM jobs WHERE id = %s",
+                    """SELECT created_at, no_of_files, files_per_task, no_of_columns
+                         FROM jobs WHERE id = %s""",
                     (job_id,),
                 )
             ).fetchone()
@@ -222,6 +224,7 @@ class TaskStore:
             created_at=job[0],
             no_of_files=int(job[1]),
             files_per_task=int(job[2] or 1),
+            no_of_columns=int(job[3]),
             pending=[PendingTask(int(r[0]), str(r[1]), int(r[2]), float(r[3])) for r in pending],
             running=[RunningTask(int(r[0]), str(r[1]), int(r[2]), str(r[3])) for r in running],
             unmerged=[(int(r[0]), int(r[1])) for r in unmerged],

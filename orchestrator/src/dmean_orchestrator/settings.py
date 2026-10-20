@@ -4,6 +4,8 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from dmean_orchestrator.scheduling.planner import Sizing
+
 
 def find_env_file(start: Path | None = None) -> Path | None:
     """Nearest .env walking up from start (the repo root .env in local dev)."""
@@ -36,11 +38,24 @@ class Settings(BaseSettings):
     grpc_host: str = "0.0.0.0"
     grpc_port: int = 50051
 
-    # Sizing (design §7)
+    # Sizing (design §7): tasks sized by expected time, independent of the number of workers
     target_task_secs: float = 25.0
     min_task_secs: float = 5.0
+    per_file_secs: float = 0.008  # fixed cost per input file (S3 GET), measured ~8 ms locally
     default_rate: float = 5_000_000.0  # values/s one worker parses (measured: ~0.2 s per 1M)
+    min_tasks_per_job: int = 8
     max_files_per_task: int = 5000
+
+    @property
+    def sizing(self) -> "Sizing":
+        return Sizing(
+            target_task_secs=self.target_task_secs,
+            min_task_secs=self.min_task_secs,
+            per_file_secs=self.per_file_secs,
+            rate=self.default_rate,
+            min_tasks_per_job=self.min_tasks_per_job,
+            max_files_per_task=self.max_files_per_task,
+        )
 
     # Leases (design §9)
     lease_secs: float = 30.0

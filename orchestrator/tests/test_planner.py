@@ -3,42 +3,50 @@ import math
 import pytest
 
 from dmean_orchestrator.scheduling.merge_pool import Partial, covers, take_merges
-from dmean_orchestrator.scheduling.planner import chunk, files_per_task, merge_fan_in
+from dmean_orchestrator.scheduling.planner import Sizing, chunk, files_per_task, merge_fan_in
 
-
-def n_for(f: int, c: int, w: int) -> int:
-    return files_per_task(
-        no_of_files=f,
-        no_of_columns=c,
-        live_workers=w,
-        target_task_secs=25.0,
-        min_task_secs=5.0,
-        rate=5_000_000.0,
-        max_files_per_task=5000,
-    )
+SIZING = Sizing(
+    target_task_secs=25.0,
+    min_task_secs=5.0,
+    per_file_secs=0.008,
+    rate=5_000_000.0,
+    min_tasks_per_job=8,
+    max_files_per_task=5000,
+)
 
 
 @pytest.mark.parametrize(
-    ("f", "c", "w", "expected", "why"),
+    ("f", "c", "expected", "why"),
     [
-        (100_000, 1_000_000, 10, 125, "time-bound: 25 s × 5M/s ÷ 1M values = 125 files"),
-        (2_000, 1_000_000, 10, 50, "spread-bound: F/4W = 50, between N_min = 25 and 125"),
-        (100_000, 1_000_000, 10_000, 25, "floor: F/4W = 2.5 would be tiny tasks; N_min = 25"),
-        (100_000, 1_000, 10, 5000, "floor 25,000 files (5 s of work) capped at N_max"),
-        (2, 999_999, 4, 25, "N ≥ F: the whole job becomes one final map task"),
+        (100_000, 1_000_000, 120, "time: 25 s / (8 ms + 0.2 s) per file = 120 files"),
+        (2_000, 1_000_000, 120, "time again: still ~25 s tasks"),
+        (40, 1_000_000, 24, "floor: 5 s / 0.208 s = 24 files, so 2 tasks rather than 8 tiny ones"),
+        (2, 999_999, 24, "N >= F: the whole job is one final map task"),
+        (20_000, 2_000, 2_500, "split: at least 8 tasks per job (time would allow 2,976)"),
+        (2_000, 100, 623, "floor: 5 s / 8.02 ms = 623 files"),
+        (100_000, 10, 3_124, "time: tiny files are dominated by the per-file cost"),
     ],
 )
-def test_files_per_task(f: int, c: int, w: int, expected: int, why: str) -> None:
-    assert n_for(f, c, w) == expected, why
+def test_files_per_task_is_sized_by_time(f: int, c: int, expected: int, why: str) -> None:
+    assert files_per_task(f, c, SIZING) == expected, why
 
 
-def test_no_live_workers_counts_as_one() -> None:
-    n = n_for(1000, 1_000_000, 0)
-    assert n == 125  # 1000 / (4 × 1) = 250, capped by time at 125
+def test_files_per_task_does_not_depend_on_the_number_of_workers() -> None:
+    import inspect
+
+    assert "worker" not in " ".join(inspect.signature(files_per_task).parameters)
 
 
-def test_merge_fan_in_is_n_but_at_least_two() -> None:
-    assert (merge_fan_in(125), merge_fan_in(1)) == (125, 2)
+def test_per_file_cost_is_what_makes_small_files_cheap_to_batch() -> None:
+    # per-file cost dominates small files: 2,000 values parse in 0.4 ms, the GET takes 8 ms
+    assert SIZING.secs_per_file(2_000) == 0.008 + 2_000 / 5_000_000
+
+
+def test_merge_fan_in_is_a_target_time_of_partials() -> None:
+    assert merge_fan_in(1_000_000, SIZING) == 120
+    assert merge_fan_in(2_000, SIZING) == 2_976
+    tiny_budget = Sizing(0.1, 0.01, 0.008, 5e6, 8, 5000)
+    assert merge_fan_in(1_000_000, tiny_budget) == 2  # never below 2
 
 
 def test_chunk_keeps_order_and_last_chunk_is_smaller() -> None:
@@ -76,7 +84,7 @@ def test_single_partial_is_not_merged_alone() -> None:
 @pytest.mark.parametrize(("f", "n"), [(10, 2), (10, 3), (37, 4), (100, 7), (1000, 125)])
 def test_simulated_job_always_ends_in_exactly_one_final_merge(f: int, n: int) -> None:
     """Maps finish in any order; merges are created as the pool allows; the last covers F."""
-    fan_in = merge_fan_in(n)
+    fan_in = max(2, n)
     maps = [len(c) for c in chunk(list(range(f)), n)]
     running = list(maps)  # tasks whose outputs are still to come (covered file counts)
     pool: list[Partial] = []

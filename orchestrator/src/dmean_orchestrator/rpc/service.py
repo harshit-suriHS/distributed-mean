@@ -149,15 +149,7 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         """Splits a queued job into map tasks (no-op if it's already planned)."""
 
         def size_for(no_of_files: int, no_of_columns: int) -> int:
-            return files_per_task(
-                no_of_files=no_of_files,
-                no_of_columns=no_of_columns,
-                live_workers=self.live_workers(),
-                target_task_secs=self._settings.target_task_secs,
-                min_task_secs=self._settings.min_task_secs,
-                rate=self._settings.default_rate,
-                max_files_per_task=self._settings.max_files_per_task,
-            )
+            return files_per_task(no_of_files, no_of_columns, self._settings.sizing)
 
         planned = await self._job_store.plan_job(job_id, size_for)
         if planned is None:
@@ -167,7 +159,6 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
             job_id=job_id,
             files_per_task=planned.files_per_task,
             tasks=planned.tasks,
-            live_workers=self.live_workers(),
         )
         await self.load_job(job_id)
 
@@ -177,7 +168,7 @@ class TaskQueueService(pb_grpc.TaskQueueServicer):
         now = self._now()
         self._jobs[job_id] = _RunningJob(
             no_of_files=snap.no_of_files,
-            fan_in=merge_fan_in(snap.files_per_task),
+            fan_in=merge_fan_in(snap.no_of_columns, self._settings.sizing),
             pool=[Partial(file_id, n) for file_id, n in snap.unmerged],
         )
         self.queue.add_job(job_id, snap.created_at.timestamp())
